@@ -59,6 +59,8 @@ per-case verdicts are [`baseline.tsv`](../../tests/conformance/book/baseline.tsv
 
 ## Where things stand
 
+With the comma form of `first` (`first{X:=1..5, 3*X>10}` is `(4, 12)`, `first.versetest:206`): **8,899 agree, 610 refuse, 1 accept, 38 differ, 3,956 not translatable** of 13,504 cases.
+
 With `ToDiagnostic` of a float (the shortest decimal that reads back, written in Verse in the helpers, [to-diagnostic.md](to-diagnostic.md#left)): **8,898 agree, 611 refuse, 1 accept, 38 differ, 3,956 not translatable** of 13,504 cases; the 14 cases of `library-diagnostic` agree and nothing else changed.
 
 With nine more forms of the Book's valid programs that UEFN 43.12 runs and openverse refused (#724, [the probes](versevm-live-conformance.md#the-books-valid-programs-openverse-refuses): a map literal's key type the join of its keys', `ConcatenateMaps` of maps keyed by different types, an `any` inside a generic parameter's type, a function named at an `any` result, a `<unique>` interface no class implements compared, a module constant's `<unique>` object and an empty map keyed by a `<unique>` class, `F(:a)` beside `F(:[]a)`, overloads on disjoint refinements): **8,875 agree, 636 refuse, 1 accept, 36 differ, 3,956 not translatable** of 13,504 cases (a full comparison against the baseline below; 20 better: `Any.versetest` 60 and 152, `SOL-3799-AddToMembersWhileIteratingOverThem.versetest:16`, `ComparableInterface.versetest` 5, 13, 26 and 37, `GlobalVariables.versetest` 72 to 74 and its declarations, `Intrinsics/ConcatenateMaps.versetest` 44 and 67, `Map.versetest:143` and its declarations, `Overloading.versetest:260`, `WhereConstrainedFloats.versetest:59` and `WhereConstrainedInts.versetest:179` with the declarations of both; none worse but `SOL-4284-InfiniteLoopTriggersUObjectLimit.versetest:18`, which spends all of Lean's fuel and ran past its 90 s limit on the loaded machine (past nine minutes there, on this branch's binary and on main's alike, run side by side), so its line is kept; the 20 lines were patched from the comparison). Before it:
@@ -116,7 +118,7 @@ With class variance of function values (#724: a function value converts to a fun
 | block-forms | 2 | `spawn{}` of several expressions, `branch` in a loop (VerseVM's) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | char-literals | 2 | `'ab'` (`TimSyntax`) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | impossible-casts | 2 | a parametric type written as a value, `MyParametricInterface(int)`, `class2(int)`, read as a conversion of `int` | left with the metatypes, [the forms still on the list](#the-forms-still-on-the-list-a-map) |
-| first-forms | 1 | `first{X:=1..5, 3*X>10}`, a generator in a tuple (`first.versetest:206`) | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
+| first-forms | 1 → 0 | `first{X:=1..5, 3*X>10}`, a generator in a tuple (`first.versetest:206`) | taken: the tuple of the clauses' values, [the rule](book-forms-rules.md#generators-in-first-and-a-ranges-typed-binding) |
 | generators | 1 | `generator(t)` | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
 | operator-definitions | 1 | `operator'+'(1,2)` called by its name in an expression (`TimSyntax.versetest:230`, parse-only) | left, [After the forms still on the list](#after-the-forms-still-on-the-list) |
 | path-literals | 1 | `Alias := import(/Verse.org)`, a module alias | left, [forms](#forms-of-expressions-statements-and-the-library-a-map) |
