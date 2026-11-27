@@ -1571,7 +1571,15 @@ recursion), measured against programs that recurse forever in two dozen
 ways, the worst of which needed about 147 bytes a call. The primitives that
 recursed once per element (`asBytes`, `flattenArrs`) are compiled from
 accumulator versions (`@[csimp]`), so that long strings and long `for`s do
-not overflow the stack either. The bounds of the two implementations count
+not overflow the stack either. The output is compiled the same way (#782):
+the state keeps it as a list, oldest byte first, and a `Print` appends to it,
+which compiled would copy everything printed so far. `Prog.runB` is compiled
+as `Prog.runR` (`Core/RevOut.lean`), which runs `evalR`: `evalB` on states
+whose output is kept newest byte first, so that a `Print` costs its own
+bytes, and a failure context still rolls its output back by returning to the
+state it kept. `evalR_rev` proves that `evalR` is `evalB` on reversed
+outputs and `Prog.runB_eq_runR` (`@[csimp]`) that the two runs are equal.
+The bounds of the two implementations count
 different things (the C interpreter evaluates argument lists in a loop and
 allows 10 million nested evaluations on a 4 GiB stack), so a program that
 recurses deeply enough to reach one of them may get a limit from one
@@ -1581,7 +1589,8 @@ In short:
 
 ```mermaid
 flowchart LR
-    run(["openverse run"]) --> evalB["evalB<br/>eval with a depth budget<br/>(Bounded.lean)"]
+    run(["openverse run"]) --> evalR["evalR<br/>evalB, output newest first<br/>(RevOut.lean)"]
+    evalR -- "evalR_rev<br/>Prog.runB_eq_runR" --> evalB["evalB<br/>eval with a depth budget<br/>(Bounded.lean)"]
     evalB -- "evalB_sound<br/>evalB_complete" --> eval["eval<br/>the interpreter, with fuel<br/>(Interp.lean)"]
     eval -- "eval_iff<br/>eval_fuel_irrelevant" --> Eval["Eval<br/>the big-step semantics<br/>(Semantics.lean)"]
     cverse(["cverse"]) -. "the same fuel count,<br/>differential tests" .-> eval

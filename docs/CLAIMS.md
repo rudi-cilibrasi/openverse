@@ -82,6 +82,26 @@ out of date. The proofs are in `OpenVerse/Core/`.
 @Prog.runB_sound : ∀ {P : Prog} {n d : Nat}, P.runB n d ≠ Bounded.deep → P.runB n d = Bounded.ofOption (P.run n)
 ```
 
+## `evalR_rev`: the interpreter openverse run executes, whose output is kept newest first, is the bounded interpreter on reversed outputs
+
+`OpenVerse/Core/RevOut.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+evalR_rev : ∀ (P : Prog) (n : Nat),
+  (∀ (d : Nat) (s : St) (e : Expr), evalR P n d s.rev e = (evalB P n d s e).revSt) ∧
+    (∀ (d : Nat) (s : St) (es : List Expr), evalListR P n d s.rev es = (evalListB P n d s es).revSt) ∧
+      ∀ (d i : Nat) (filt body : Expr) (s : St) (vs acc : List Value),
+        evalForR P n d i filt body s.rev vs acc = (evalForB P n d i filt body s vs acc).revSt
+```
+
+## `Prog.runB_eq_runR`: what openverse run executes (Prog.runR, an output that costs its own length) is Prog.runB
+
+`OpenVerse/Core/RevOut.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+Prog.runB_eq_runR : Prog.runB = Prog.runR
+```
+
 ## `ite_rollback`: a failed if condition is rolled back
 
 `OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]

@@ -14,6 +14,8 @@ thms=(
   "Bounded:evalB_sound:the depth-bounded interpreter of openverse run is eval whenever it does not stop for depth"
   "Bounded:evalB_complete:with a depth budget at least the fuel, the bounded interpreter is eval"
   "Bounded:Prog.runB_sound:openverse run computes Prog.run whenever it does not hit its depth bound"
+  "RevOut:evalR_rev:the interpreter openverse run executes, whose output is kept newest first, is the bounded interpreter on reversed outputs"
+  "RevOut:Prog.runB_eq_runR:what openverse run executes (Prog.runR, an output that costs its own length) is Prog.runB"
   "Derived:ite_rollback:a failed if condition is rolled back"
   "Derived:notE_ok:a successful not e discards the effects of e"
   "Derived:notE_notE_ok:not not e is a pure test"

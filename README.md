@@ -61,6 +61,7 @@ flowchart TD
 | `Eval.det`, `Runs.det` | `Core/Adequacy.lean` | Verse Core is deterministic: one outcome, one output |
 | `Prog.run_sound`, `Prog.run_complete` | `Core/Adequacy.lean` | running `Main` with enough fuel is exactly `Runs` |
 | `evalB_sound`, `evalB_complete`, `Prog.runB_sound` | `Core/Bounded.lean` | `openverse run` runs `evalB`, which is `eval` with a bound on its native recursion depth: whenever it does not stop for depth it computes exactly `eval`, and with a bound at least the fuel it never stops for depth |
+| `evalR_rev`, `Prog.runB_eq_runR` | `Core/RevOut.lean` | the code `openverse run` executes keeps the output newest byte first, so that a `Print` costs its own bytes and not everything printed so far (#782): it is `evalB` on reversed outputs, and the run with the output put back in order is `Prog.runB` |
 | `ite_rollback` | `Core/Derived.lean` | once an `if` condition fails, the `if` behaves as its `else` branch from the **original** state (rollback) |
 | `notE_ok`, `notE_notE_ok` | `Core/Derived.lean` | `not e` always discards `e`'s effects; `not not e` is a pure test (Book of Verse §5.5) |
 | `chooseFirst_brk`, `chooseFirst_none`, `firstE_of_brk`, `firstE_of_ok`, `altE_sel` | `Core/Derived.lean` | a choice `a \| b` (#208) in an `if` condition or `first{}` breaks out at its first alternative that succeeds, in the state it left, with the alternatives before it rolled back, or ends with no value; the condition then succeeds or fails. The lemmas compose along the code the front end emits |
