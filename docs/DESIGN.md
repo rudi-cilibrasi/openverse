@@ -1807,6 +1807,12 @@ and four ordered handler stages. Only applications fall through
 between stages; recursive elaboration enters the public function, retaining its
 construction probe once per call. This also limits individual function control
 flow, which otherwise exhausts memory in Wasm code generation.
+The namespace `Choice` is three modules for the same reason, each importing
+the one before: `ChoiceLift.lean` (the surface side of a choice and its
+lifting out of an expression), `ChoiceFns.lean` (functions with several
+values, their calls inlined, methods and overloads) and `Choice.lean` (what
+puts them together for a program, `inlineMulti`). As one module its C was at
+97% of the unit budget.
 `test-frontend-c-size.sh` follows the generated import closure and checks both
 the 8 MiB unit budget and a 1 MiB function budget. Stale build files do not
 affect the result. Resource
