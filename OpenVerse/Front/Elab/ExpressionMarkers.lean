@@ -145,10 +145,7 @@ partial def elabExprMarkersWith
     (elabConc : Ctx → Pos → Bool → List SExpr → Option Ty → (isRush : optParam Bool false) → EM R)
     (elabSpawn : Ctx → Pos → SExpr → EM R)
     (elabBranch : Ctx → Pos → SExpr → EM R)
-    (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
     (elabFor : Ctx → Pos → List SExpr → SExpr → (prepared : optParam Bool false) → (firstDecides : optParam Bool false) → (failure : optParam (Option SExpr) none) → EM R)
-    (elabOneClauses : Ctx → List SExpr → EM (R × Ctx))
-    (elabFirstGo : Ctx → List SExpr → EM (Expr × Ctx))
     (next : Ctx → SExpr → Option Ty → EM R)
     (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
   match se with
@@ -438,6 +435,21 @@ partial def elabExprMarkersWith
     elabE ctx (.app p (.ident p "$forResumeValues")
       [environments, forStageCopyMetadata p (plan.copies.map (·.1)),
        .block p (plan.borrowed.map (SExpr.ident p ·))] false) exp
+  | _ => next ctx se exp
+
+set_option maxHeartbeats 800000 in
+/-- The second half of the markers stage, which `elabExprMarkersWith` falls
+    through to: one function of both exceeded the generated-C function budget
+    (`test-frontend-c-size.sh`). Each marker's arms are in one of the two. -/
+partial def elabExprMarkersLateWith
+    (elabE : Ctx → SExpr → Option Ty → EM R)
+    (elabApp : Ctx → Pos → SExpr → List SExpr → Bool → Option Ty → EM R)
+    (elabFor : Ctx → Pos → List SExpr → SExpr → (prepared : optParam Bool false) → (firstDecides : optParam Bool false) → (failure : optParam (Option SExpr) none) → EM R)
+    (elabOneClauses : Ctx → List SExpr → EM (R × Ctx))
+    (elabFirstGo : Ctx → List SExpr → EM (Expr × Ctx))
+    (next : Ctx → SExpr → Option Ty → EM R)
+    (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
+  match se with
   | .app p (.ident _ "$forPrepare") [.str _ [.text base], .decl _ _ (some view) _ _, .block _ copyIds, .block _ borrowIds, .ident _ flat, .block _ clauses, body] false => do
     let some plan := ctx.types.requests.loops.findSome? (fun l => l.stagePlan.filter (·.base == base))
       | eerr p "internal: missing for prepare plan"

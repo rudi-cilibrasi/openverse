@@ -1803,7 +1803,9 @@ callbacks (an application's as one record, `AppElab`); their public
 wrappers keep the original signatures. This keeps each
 generated C translation unit below the browser build's 8 MiB optimization
 threshold. The expression entry point uses an exhaustive constructor router
-and four ordered handler stages. Only applications fall through
+and five ordered handler stages (the markers' stage is two, `elabExprMarkersWith`
+and `elabExprMarkersLateWith`: as one function its C was at 93% of the
+function budget). Only applications fall through
 between stages; recursive elaboration enters the public function, retaining its
 construction probe once per call. This also limits individual function control
 flow, which otherwise exhausts memory in Wasm code generation.
