@@ -186,6 +186,7 @@ check "overload domains (${FUZZ_OVERLOAD_SHAPES:-546} programs, across seven con
 check "call packing (${FUZZ_CALL_PACKING:-60} programs, across ten contexts)" \
   bash tests/scripts/test-call-packing.sh "${FUZZ_CALL_PACKING:-60}" "$seed"
 check "choice-free source profile" bash tests/scripts/test-choice-profile.sh
+check "output linear in its length (200,000 Prints, kept and rolled back, #782)" bash tests/scripts/test-print-linear.sh
 check "small integer value sharing" bash tests/scripts/test-small-int-cache.sh
 check "empty collection value sharing" bash tests/scripts/test-empty-value-cache.sh
 check "helpers each program asks for" bash tests/scripts/test-helper-needs.sh
