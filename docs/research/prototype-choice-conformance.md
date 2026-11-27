@@ -11,7 +11,7 @@ comparison, made on 2026-11-26 against the prototype at `d0eababf` and openverse
 
 - On 5,000 random programs in the fragment both accept, openverse and the prototype give the
   same values in the same order, with the same repetitions, on every one the prototype finishes
-  (all but 32).
+  (all but 24).
 - openverse refused one form the prototype has: a choice in the body of a `for`. It is supported
   now (`docs/LANGUAGE.md`, [Choice](../LANGUAGE.md#choice), "In the body of a `for`"), with the
   prototype's results.
@@ -57,9 +57,9 @@ for function definitions).
 | With functions, arrays, `not`, binding conditions, main at `652a0f1d` | 1,500 | 1,430 | 70 | 0 |
 | The same generator, with a `for` body's choice supported, at this change | 2,000 | 2,000 | 0 | 0 |
 | With programs whose values are the arrays of a `for`, its body's choices included | 1,000 | 1,000 | 0 | 0 |
-| With array literals and joins, generators over arrays, recursive and two-parameter functions, inner `for`s with two clauses and a filter | 2,050 | 2,018 | 0 | 0 |
+| With array literals and joins, generators over arrays, recursive and two-parameter functions, inner `for`s with two clauses and a filter | 2,050 | 2,026 | 0 | 0 |
 
-In the last batch the other 32 programs ran past the prototype's step or time limit, so they
+In the last batch the other 24 programs ran past the prototype's step or time limit, so they
 have no verdict. All 70 refusals in the second batch were a choice, or a call of a function with several values,
 in the body of a `for`.
 
