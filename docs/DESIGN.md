@@ -69,6 +69,9 @@ from addresses to objects (`Core/PersistentHeap.lean`): `evalP` is `evalB`
 with that heap, `evalP_toSt` proves it gives `evalB`'s results when the map
 is read as an array, and `Prog.runB_eq_runP` substitutes it in compiled
 code. The semantics and the theorems about it do not mention it.
+The same evaluator keeps each frame in an array where the semantics has a
+list, so a slot is read and written in constant time: a loop in a function
+of 400 locals ran 16 times slower than in one of 5.
 
 Because Verse has no closures and frames are not shared, a callee cannot
 write its caller's frame. So rollback only ever restores slots of the frames
