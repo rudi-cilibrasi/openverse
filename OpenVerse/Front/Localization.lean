@@ -163,6 +163,8 @@ partial def desugar (tops : List STop) : Except String (List STop × Bool) := do
   -- (the calls in all of a definition's code, a struct's fields' defaults too)
   return (if used then out.toList.map (STop.mapAll id (rewriteCall lz jn)) else tops, used)
 
-def tops : Except String (List STop) := parsePrelude prelude names
+set_option compiler.extract_closed false in
+def tops : Thunk (Except String (List STop)) :=
+  Thunk.mk fun _ => parsePrelude prelude names
 
 end OpenVerse.Front.Localization

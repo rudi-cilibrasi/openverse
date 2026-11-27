@@ -116,7 +116,9 @@ partial def mentionsBitwise : SExpr → Bool
   | .ident _ n => n != "BitNot" && bitwiseFunctions.contains n
   | e => e.children.any mentionsBitwise
 
+set_option compiler.extract_closed false in
 /-- The helpers, parsed (their names renamed). -/
-def bitwiseTops : Except String (List STop) := parsePrelude bitwisePrelude bitwiseNames
+def bitwiseTops : Thunk (Except String (List STop)) :=
+  Thunk.mk fun _ => parsePrelude bitwisePrelude bitwiseNames
 
 end OpenVerse.Front

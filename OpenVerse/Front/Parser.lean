@@ -2705,7 +2705,11 @@ def parseProgram (src : String) : Except String (List STop) := do
   return withRatMarker toks (withIgnoredArms tops st)
 
 /-- Parse the source of built-in helpers, renaming the given names to
-    `$name`, which no program can write or define. -/
+    `$name`, which no program can write or define.
+    A prelude's parsed definitions are kept as a `Thunk`, with
+    `compiler.extract_closed` off at its definition: a plain constant is
+    computed when the program starts, and nine preludes parsed on every
+    run were 70% of the time to compile a small program. -/
 def parsePrelude (src : String) (names : List String) : Except String (List STop) := do
   let toks ← lexSource src
   let toks := toks.map fun t => match t.tok with

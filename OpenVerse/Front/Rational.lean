@@ -66,8 +66,10 @@ ratLt(A:tuple(int, int), B:tuple(int, int))<computes><decides>:void =
     Less?
 "
 
+set_option compiler.extract_closed false in
 /-- The helpers, parsed (their names renamed). -/
-def ratTops : Except String (List STop) := parsePrelude ratPrelude ratNames
+def ratTops : Thunk (Except String (List STop)) :=
+  Thunk.mk fun _ => parsePrelude ratPrelude ratNames
 
 /-- `A.ReplaceAll(Pattern, Replacement)` (#150): every non-overlapping
     occurrence of the pattern, left to right, replaced; an empty pattern
@@ -91,8 +93,8 @@ replaceAll(A:[]t, P:[]t, R:[]t where t:subtype(comparable))<computes>:[]t =
             break
     Out
 "
-
-def replaceAllTops : Except String (List STop) :=
-  parsePrelude replaceAllPrelude ["replaceAll", "A", "P", "R", "Out", "I", "S", "E", "t"]
+set_option compiler.extract_closed false in
+def replaceAllTops : Thunk (Except String (List STop)) :=
+  Thunk.mk fun _ => parsePrelude replaceAllPrelude ["replaceAll", "A", "P", "R", "Out", "I", "S", "E", "t"]
 
 end OpenVerse.Front

@@ -231,19 +231,19 @@ def admitSource (written : List STop) (opts : Options) : Except String Admitted 
   let usesDiagnostic := (marked diagnosticMarker ||
     (opts.entry.map (Choice.anyE fun | .ident _ n => n == "ToDiagnostic" | _ => false)).getD false) &&
     !definesDiagnostic
-  let helpers := (← if usesRat then ratTops else pure []) ++ (← if usesReplaceAll then replaceAllTops else pure []) ++
-    (← if usesBitwise then bitwiseTops else pure []) ++
-    (← if usesLocalization then Localization.tops else pure [])
+  let helpers := (← if usesRat then ratTops.get else pure []) ++ (← if usesReplaceAll then replaceAllTops.get else pure []) ++
+    (← if usesBitwise then bitwiseTops.get else pure []) ++
+    (← if usesLocalization then Localization.tops.get else pure [])
   let intrinsicCalls := helpers.filterMap fun | .fn _ n .. => some n | _ => none
   -- (not `ToDiagnostic`'s: it calls a `diagnosable` object's own method,
   -- which may not converge)
-  let helpers := helpers ++ (← if usesDiagnostic then Diagnostic.tops else pure [])
+  let helpers := helpers ++ (← if usesDiagnostic then Diagnostic.tops.get else pure [])
   -- (#724; nor `GetRandomInt`'s, which is <transacts>: unless the program
   -- defines the name itself, and then its own is the one it calls)
   let definesRandom := allTops0r.any fun
     | .fn _ n .. | .const _ n .. | .classDef _ n .. => n == "GetRandomInt"
   let usesRandom := (marked randomMarker || (opts.entry.map mentionsRandom).getD false) && !definesRandom
-  let helpers := helpers ++ (← if usesRandom then randomTops else pure [])
+  let helpers := helpers ++ (← if usesRandom then randomTops.get else pure [])
   let ignoredArms := ignoredArmsOf allTops0r
   let unmarked := allTops0r.filter fun
     | .const _ n _ _ _ => ![ratMarker, replaceAllMarker, ignoredArmsMarker, bitwiseMarker, diagnosticMarker, randomMarker].contains n
@@ -375,7 +375,7 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   -- contracts before inlining can replace a declaration by a checking stub.
   EffectPolicy.check producerTops
   -- (#208) a `for` whose body has several values, as the call that has them
-  let productHelpers ← forProductTops
+  let productHelpers ← forProductTops.get
   let (resolvedTops, usesProduct) := Choice.forProducts productHelpers admitted.resolved
   let written := producerTops ++ resolvedTops ++ (if usesProduct then productHelpers else [])
   let ⟨resolved, lazy, logicalCells, familySites, overloadSites, nestedSites, fieldSites, copiedOverloadNames, copiedOverloadClashes, copiedMethods⟩ ← Choice.inlineMulti written reserved
@@ -383,7 +383,7 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
     requests.fieldOrders requests.instanceCalls
   let resolved := resolved.map (STop.mapAll id Choice.restoreProducerDefaultContexts)
   -- (#246) the class of the stack cells of lazily taken ones
-  let helpers := admitted.helpers ++ (← if lazy then lazyTops else pure [])
+  let helpers := admitted.helpers ++ (← if lazy then lazyTops.get else pure [])
   -- (#283) and of the cells of the vars their frames set
   let cells (e : SExpr) : Bool := Choice.anyE (fun | .construct _ "$varcell" .. => true | _ => false) e
   -- A dormant generic helper can retain a cell parameter after its
@@ -392,7 +392,7 @@ def inlineSource (requests : Requests) (admitted : Admitted) :
   let requestedCells := requests.loops.any fun request => request.extraFns.any fun
     | .classDef _ "$varcell" .. => true
     | _ => false
-  let helpers := helpers ++ (← if usesCells && !requestedCells then varcellTops else pure [])
+  let helpers := helpers ++ (← if usesCells && !requestedCells then varcellTops.get else pure [])
   -- the branches of casts that refine type arguments, as functions (#243)
   -- (in front, as the entry expression is the end)
   let resolved := Refine.functions requests.casts resolved ++ resolved
