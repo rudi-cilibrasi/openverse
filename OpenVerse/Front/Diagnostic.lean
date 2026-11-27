@@ -41,7 +41,9 @@ def preludeNames : List String :=
    "diagEscaped", "diagChar",
    "diagChar32", "diagByte", "diagCont", "diagSeq", "diagString", "diagJoin", "diagArray", "diagMap",
    "diagRational", "rationalParts", "dValue", "dN", "dM", "dOut", "dR", "dQ", "dD", "dE", "dC", "dS",
-   "dI", "dB", "dB0", "dC1", "dC2", "dC3", "dLo", "dHi", "dSeq", "dCP", "dP", "dParts"]
+   "dI", "dB", "dB0", "dC1", "dC2", "dC3", "dLo", "dHi", "dSeq", "dCP", "dP", "dParts",
+   "diagFloat", "dfPow", "dfDiv", "dfDivRound", "dfParts", "dfInside", "dfShortest", "dfZeros", "dfLayout",
+   "dA", "dF", "dX", "dK", "dT", "dR1", "dMe", "dDq", "dDs", "dH", "dAbs", "dEs"]
 
 /-- The helpers, in Verse. The format is the Book of Verse's tests'
     (`Tests/Intrinsics/ToDiagnostic.versetest`): a char printable in ASCII
@@ -53,7 +55,12 @@ def preludeNames : List String :=
     any other number `(X, Y)`; a map `map{K => V, …}`; a rational reduced,
     `N/D`, or its int; an int in decimal, also one beyond 64 bits
     (`ToDiagnostic.versetest:35-40`, `verse_vm_only`), which `ToString`
-    refuses (#724): its decimal digits are taken 18 at a time. -/
+    refuses (#724): its decimal digits are taken 18 at a time; a float as
+    the shortest decimal that reads back as it, laid out as Python's `repr`
+    (`1.5`, `1e+100`, `5e-324`; `NaN`, `Inf`, `-Inf`), which is what
+    `VFloat.render` computes in Lean: `diagFloat` takes the float apart
+    with exact halvings and doublings, and does the rest in ints, which are
+    exact at these sizes (#724). -/
 def prelude : String := "
 anything := interface<computes>:
     Diagnose()<reads>:string
@@ -164,6 +171,124 @@ diagMap(dParts:[]string)<computes>:string = \"map\\{\" + diagJoin(dParts) + \"\\
 
 diagRational(dP:tuple(int, int))<computes>:string =
     if (dP(1) = 1) then diagInt(dP(0)) else diagInt(dP(0)) + \"/\" + diagInt(dP(1))
+
+dfPow(dB:int, dN:int)<computes>:int =
+    var dOut:int = 1
+    var dI:int = 0
+    loop:
+        if (dI >= dN) then break
+        set dOut *= dB
+        set dI += 1
+    dOut
+
+dfDiv(dA:int, dD:int)<computes>:int = if (dQ := Quotient[dA, dD]) then dQ else 0
+
+dfDivRound(dA:int, dD:int)<computes>:int =
+    dQ := dfDiv(dA, dD)
+    dR := dA - dQ * dD
+    if (2 * dR > dD) then dQ + 1
+    else if (2 * dR = dD, Mod[dQ, 2] = 1) then dQ + 1
+    else dQ
+
+dfParts(dF:float)<computes>:tuple(int, int) =
+    var dX:float = dF
+    var dE:int = 0
+    loop:
+        if (dX >= 9007199254740992.0):
+            set dX = dX / 2.0
+            set dE += 1
+        else if (dX < 4503599627370496.0, dE > -1074):
+            set dX = dX * 2.0
+            set dE -= 1
+        else:
+            break
+    if (dM := Floor[dX]) then (dM, dE) else (0, 0)
+
+dfInside(dD:int, dQ:int, dS:int, dLo:int, dHi:int, dC:logic)<computes><decides>:void =
+    dN := dD * (if (dQ >= 0) then dfPow(10, dQ) else 1) * (if (dS >= 0) then dfPow(2, dS) else 1)
+    dM := (if (dQ >= 0) then 1 else dfPow(10, -dQ)) * (if (dS >= 0) then 1 else dfPow(2, -dS))
+    if (dC?) then (dLo * dM <= dN, dN <= dHi * dM) else (dLo * dM < dN, dN < dHi * dM)
+
+dfShortest(dM:int, dE:int)<computes>:tuple(int, int) =
+    dS := 2 - dE
+    dLo := dM * 4 - (if (dM = 4503599627370496, dE > -1074) then 1 else 2)
+    dHi := dM * 4 + 2
+    dC:logic = if (Mod[dM, 2] = 0) then true else false
+    dA := dM * (if (dE >= 0) then dfPow(2, dE) else 1)
+    dB := if (dE >= 0) then 1 else dfPow(2, -dE)
+    var dK:int = 0
+    var dT:int = 10 * dB
+    loop:
+        if (dA >= dT):
+            set dK += 1
+            set dT *= 10
+        else:
+            break
+    set dT = dA * 10
+    loop:
+        if (dK <= 0, dT < dB * 10):
+            set dK -= 1
+            set dT *= 10
+        else:
+            break
+    var dP:int = 1
+    var dOut:tuple(int, int) = (0, 0)
+    loop:
+        dQ := dK - dP + 1
+        dN := if (dQ >= 0) then dA else dA * dfPow(10, -dQ)
+        dD := if (dQ >= 0) then dB * dfPow(10, dQ) else dB
+        dR := dfDivRound(dN, dD)
+        dR1 := if (dR * dD < dN) then dR + 1 else dR - 1
+        if (dfInside[dR, dQ, dS, dLo, dHi, dC]):
+            set dOut = (dR, dQ)
+            break
+        else if (dR1 > 0, dfInside[dR1, dQ, dS, dLo, dHi, dC]):
+            set dOut = (dR1, dQ)
+            break
+        else if (dP >= 17):
+            set dOut = (dR, dQ)
+            break
+        set dP += 1
+    dOut
+
+dfZeros(dN:int)<computes>:string =
+    var dOut:string = \"\"
+    var dI:int = 0
+    loop:
+        if (dI >= dN) then break
+        set dOut += \"0\"
+        set dI += 1
+    dOut
+
+dfLayout(dDs:string, dP:int)<computes>:string =
+    dN := dDs.Length
+    if (dP <= -4 or dP > 16, dH := dDs.Slice[0, 1], dT := dDs.Slice[1, dN]):
+        dX := dP - 1
+        dAbs := if (dX < 0) then -dX else dX
+        dEs := if (dAbs < 10) then \"0\" + ToString(dAbs) else ToString(dAbs)
+        (if (dN > 1) then dH + \".\" + dT else dDs) + \"e\" + (if (dX < 0) then \"-\" else \"+\") + dEs
+    else if (dP <= 0) then \"0.\" + dfZeros(-dP) + dDs
+    else if (dP >= dN) then dDs + dfZeros(dP - dN) + \".0\"
+    else if (dH := dDs.Slice[0, dP], dT := dDs.Slice[dP, dN]) then dH + \".\" + dT
+    else dDs
+
+diagFloat(dF:float)<computes>:string =
+    if (not IsFinite[dF]) then (if (dF > 0.0) then \"Inf\" else if (dF < 0.0) then \"-Inf\" else \"NaN\")
+    else if (dF = 0.0) then \"0.0\"
+    else if (dF < 0.0) then \"-\" + diagFloat(-dF)
+    else:
+        dMe := dfParts(dF)
+        dDq := dfShortest(dMe(0), dMe(1))
+        var dD:int = dDq(0)
+        var dQ:int = dDq(1)
+        loop:
+            if (dD > 0, Mod[dD, 10] = 0):
+                set dD = dfDiv(dD, 10)
+                set dQ += 1
+            else:
+                break
+        dDs := ToString(dD)
+        dfLayout(dDs, dDs.Length + dQ)
 "
 
 /-- The names of the Book's definitions the helpers give: a program that
@@ -320,7 +445,7 @@ def printer (env : TyEnv) (p : Pos) (t : Ty) : Except String (STop × List Ty) :
           (SExpr.ite p [.decl p "$Y" none false (.app p (.ident p d) [x] true)] o (some e), ds ++ deps))
           (last, lastDeps)
         pure (e, deps)
-    | .float => refuse "a float (the shortest decimal that reads back is a Verse Core primitive not written yet)"
+    | .float => pure (call p "$diagFloat" [x], [])
     | .dyn => refuse "a comparable (the type of its value is in its box, which no Verse code reads)"
     | .param n _ => refuse s!"a value of the type parameter {n}"
     | .weakMap .. => refuse "a weak_map"

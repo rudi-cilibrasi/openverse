@@ -154,20 +154,17 @@ the expected string: `:159`, `:160`, `:166`, `:167`, `:180`, `:181`, `:187`,
 
 ## Left
 
-- **The float printer**, Verse Core's: the shortest decimal that reads
-  back to the same double needs exact arithmetic on the double's bits,
-  which Verse code over 64-bit ints cannot do for every double. Lean has
-  it already, `VFloat.render`, kept for the compiler's messages. A new
-  primitive `ftoShortest` (`Core/Prims.lean`), with its seam in
-  `Core/Seams.lean` beside `fixed6`'s (`ToString`), its code in OVBC's
-  primitive table (the loader's bound on primitive codes), and a C
-  implementation (a correctly rounded `%.17g` narrowed to the shortest
-  precision that reads back, as `fuzz-floats.sh` would check against
-  Python's `repr`). Theorems touched: the primitives' typing and
-  evaluation lemmas (`Prim` cases of `TypeSafety.lean`, `Typing.lean`,
-  `Adequacy.lean`), none of the language's: the primitive gives a string.
-  Then `printer`'s `float` case calls it, and the 14 cases agree (the
-  front end only; `Inf`, `NaN`, `-0.0` as the tests have them).
+- **The float printer** is written (2026-11-26), in Verse and not as a
+  Verse Core primitive: `diagFloat` in the helpers
+  (`OpenVerse/Front/Diagnostic.lean`). Since ints are exact past 64 bits
+  (#724), Verse code can do what `VFloat.render` does in Lean: it finds the
+  float's significand and binary exponent with exact halvings and
+  doublings, then looks for the shortest decimal in its rounding interval
+  with integer arithmetic, and lays it out as Python's `repr` does. It
+  agrees with Python's `repr` on 4,200 floats (random bit patterns, both
+  signs, the smallest subnormal, the largest double, the boundaries of the
+  layouts), in Lean and in C. The 14 cases agree. Nothing in Verse Core,
+  OVBC or the C runtime changed.
 - **Unbounded ints** (`:36-40`): openverse's ints are the Blueprint VM's.
 - **A `comparable`'s or a type parameter's value as an `any`**: a printer
   needs the type, which the box (Verse Core's `dyn`) or the caller has; a

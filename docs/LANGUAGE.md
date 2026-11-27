@@ -3210,13 +3210,19 @@ above) becomes an object of a class the front end writes for `t`, which
 prints it when `ToDiagnostic` runs (so an object's `var` fields are
 printed as they are then). What a program can do with an `any` is
 unchanged; what differs: such a conversion allocates an object, and the
-conversion of a value that cannot be printed yet is refused there: a float
-(the shortest decimal that reads back, the Book's `1.5`, `1e+100`, needs a
-primitive Verse Core does not have yet), a value holding one, a
+conversion of a value that cannot be printed yet is refused there: a
 `comparable` (its box's type is read by no Verse code), a value of a type
 parameter (in generic code), a weak map, a type as a value. A program that
 never calls `ToDiagnostic`, or that defines `ToDiagnostic`, `diagnostic` or
 `diagnosable` itself, is compiled as before.
+
+A float prints as the shortest decimal that reads back as it, laid out as
+Python's `repr` does, which is the format of the Book's tests: `1.5`,
+`1e+100`, `1.234e+101`, `5e-324`, `0.0`, `NaN`, `Inf`, `-Inf`. (`ToString`
+of a float is the Book's other format, six digits after the point.) The
+printer is Verse code in the helpers (`diagFloat`): it takes the float
+apart with exact halvings and doublings and does the rest in ints, which
+are exact at these sizes, so Verse Core has no primitive for it.
 
 ## comparable
 

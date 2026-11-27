@@ -8,12 +8,12 @@ stop being true.
 
 <!-- scoreboard-summary:begin -->
 Epic's shipped compiler and Verse VM (UEFN 43.12) have answered 539 probe programs. openverse
-gives the same answer on 487 of them and a different one on 52:
+gives the same answer on 486 of them and a different one on 53:
 
 - **32** gaps: Verse that Epic admits and runs, and openverse refuses because the form is not implemented. openverse says so at compile time; it does not run these programs wrongly.
 - **9** where Epic stops with an internal error or stalls, and openverse computes the result.
 - **3** where openverse has a form of the Book of Verse that 43.12 does not ship yet.
-- **3** library names Epic keeps internal or restricted, which openverse lets a program use.
+- **4** library names Epic keeps internal or restricted, which openverse lets a program use.
 - **4** kept on purpose, where Epic's behaviour is unspecified or not worth imitating.
 - **1** caused by the probe's form, not the language.
 <!-- scoreboard-summary:end -->
@@ -126,18 +126,18 @@ the gate fails until the row is gone and this page is regenerated.
 | | Probes |
 | --- | ---: |
 | Probes Epic has answered | 539 |
-| Same result (refused by both, or the same lines, or the same lines then a runtime error) | 432 |
+| Same result (refused by both, or the same lines, or the same lines then a runtime error) | 431 |
 | Admitted by both, not run on Epic | 55 |
-| Different | 52 |
+| Different | 53 |
 | Not asked of Epic | 40 |
 
-The 52 differences by cause (each is listed below):
+The 53 differences by cause (each is listed below):
 
 | Cause | Probes | Meaning |
 | --- | ---: | --- |
 | gap | 32 | Verse that UEFN 43.12 admits and runs, and OpenVerse refuses: not implemented yet |
 | book-ahead | 3 | OpenVerse has a form of the Book of Verse that UEFN 43.12 does not have yet |
-| restricted-name | 3 | A library name UEFN 43.12 keeps internal or restricted; OpenVerse lets a program use it |
+| restricted-name | 4 | A library name UEFN 43.12 keeps internal or restricted; OpenVerse lets a program use it |
 | kept | 4 | OpenVerse's behaviour is kept on purpose, where Epic's is unspecified or not worth imitating |
 | epic-defect | 9 | Epic stops or stalls where the language defines a result; OpenVerse computes it |
 | harness | 1 | The probe's form, not the language: it uses a name only the UEFN device wrapper has |
@@ -164,7 +164,7 @@ A set is a directory of `tests/conformance/versevm` (`original`: the directory i
 | `followup-event` | 14 | 12 | 0 | 2 | 0 |
 | `followup-int` | 27 | 19 | 0 | 8 | 0 |
 | `followup-print` | 10 | 10 | 0 | 0 | 0 |
-| `followup-refused` | 60 | 27 | 0 | 33 | 0 |
+| `followup-refused` | 60 | 26 | 0 | 34 | 0 |
 | `followup-variance` | 16 | 0 | 0 | 0 | 16 |
 
 ### Every difference
@@ -220,7 +220,7 @@ OpenVerse has a form of the Book of Verse that UEFN 43.12 does not have yet.
 | `subscribable-event-control` | refused: error 3506 | ran: after success 2 | subscribable_event is the Book's name; on UEFN 43.12 Subscribe is on event and the name is unknown (3506) |
 | `div-const-for-choice-call-control` | refused | ran: count 2 | The choice operator `|` is in the Book; UEFN 43.12 has not implemented it (3101) |
 
-#### `restricted-name` (3)
+#### `restricted-name` (4)
 
 A library name UEFN 43.12 keeps internal or restricted; OpenVerse lets a program use it.
 
@@ -229,6 +229,7 @@ A library name UEFN 43.12 keeps internal or restricted; OpenVerse lets a program
 | `cancel-task-child` | refused | ran: branch cleanup \| runner cleanup \| cancelled \| after wait | task.Cancel is <epic_internal> on UEFN 43.12 (3593) |
 | `sticky-event-subscribe` | refused | ran: subscribed \| sticky 2 \| after | sticky_event needs /Verse.org/Restricted on UEFN 43.12 (3506) |
 | `todiagnostic-float-control` | refused | ran: diagnostic 15 | diagnostic's String is <epic_internal> on UEFN 43.12 (3593) |
+| `todiagnostic-float` | refused | ran: diagnostic 1.5 | diagnostic's String is <epic_internal> on UEFN 43.12 (3593) |
 
 #### `kept` (4)
 
