@@ -222,7 +222,7 @@ exclusive rule stays ("has more than one of <converges>, <computes> and
 named ones first; a data type's construction budget (`EffectPolicy.constructionFx`)
 does too now. A function with several values computed at its calls (#283)
 must be effect-free: `<computes>` with no additive heap specifier
-(`Choice.lean`).
+(the namespace `Choice`).
 
 **What changed.** `tests/errors/fx_computes_and_reads.verse` and
 `tests/errors/fx_generic_computes.verse` expected the old refusal of
