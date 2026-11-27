@@ -307,7 +307,7 @@ box_plain_tagged : ∀ (V : Variances) (Ξ : HeapTy) (c : Code),
         Runs P r out →
           r ≠ Res.err ErrKind.type ∧
             ∃ fr heap,
-              Eval P Prog.initSt (Expr.call P.main []) r { fr := fr, g := { out := out, heap := heap } } ∧
+              Eval P Prog.initSt (Expr.call P.main []) r { fr := fr, g := { outRev := out.reverse, heap := heap } } ∧
                 ∃ Ξ, HeapOK S Ξ heap ∧ ∀ (v : Value), r = Res.ok v → hasTy S.var Ξ v τ = true
 ```
 
@@ -455,7 +455,8 @@ VTy.sub_ref_of_prefix : ∀ (V : Variances) {ts us : List Nat} {as bs : List VTy
                 r ≠ Res.err ErrKind.type ∧
                   r ≠ Res.err ErrKind.control ∧
                     (∃ fr heap,
-                        Eval P Prog.initSt (Expr.call P.main []) r { fr := fr, g := { out := out, heap := heap } } ∧
+                        Eval P Prog.initSt (Expr.call P.main []) r
+                            { fr := fr, g := { outRev := out.reverse, heap := heap } } ∧
                           ∃ Ξ, HeapOK S Ξ heap ∧ ∀ (v : Value), r = Res.ok v → hasTy S.var Ξ v τ = true) ∧
                       (∀ (fn : Fn), P.fns[P.main]? = some fn → fn.decides = false → r ≠ Res.fail) ∧
                         ∀ (r' : Res) (out' : List Nat), Runs P r' out' → r' = r ∧ out' = out

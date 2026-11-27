@@ -457,7 +457,7 @@ theorem Runs.det {P : Prog} {r₁ o₁ r₂ o₂} (h₁ : Runs P r₁ o₁) (h�
   obtain ⟨_, _, h₁⟩ := h₁
   obtain ⟨_, _, h₂⟩ := h₂
   obtain ⟨hr, hs⟩ := Eval.det h₁ h₂
-  exact ⟨hr, congrArg (fun s : St => s.g.out) hs⟩
+  exact ⟨hr, by simpa using congrArg (fun s : St => s.g.outRev) hs⟩
 
 /-- `Prog.run` is correct: when it finishes, the program `Runs` to that outcome and output. -/
 theorem Prog.run_sound {P : Prog} {n r out} (h : P.run n = some (r, out)) : Runs P r out := by
@@ -466,13 +466,13 @@ theorem Prog.run_sound {P : Prog} {n r out} (h : P.run n = some (r, out)) : Runs
   · simp [hx] at h
   · simp only [hx, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
     obtain ⟨rfl, rfl⟩ := h
-    exact ⟨s'.fr, s'.g.heap, eval_sound n hx⟩
+    exact ⟨s'.fr, s'.g.heap, by simpa [Glob.out] using eval_sound n hx⟩
 
 /-- `Prog.run` is complete: a program that `Runs` is run correctly by enough fuel. -/
 theorem Prog.run_complete {P : Prog} {r out} (h : Runs P r out) :
     ∃ N, ∀ n, N ≤ n → P.run n = some (r, out) := by
   obtain ⟨fr, heap, h⟩ := h
   obtain ⟨N, H⟩ := eval_complete h
-  exact ⟨N, fun n hn => by simp [Prog.run, H n hn]⟩
+  exact ⟨N, fun n hn => by simp [Prog.run, H n hn, Glob.out]⟩
 
 end OpenVerse

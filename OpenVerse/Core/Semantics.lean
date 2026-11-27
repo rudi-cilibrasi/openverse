@@ -29,11 +29,17 @@ structure Obj where
     heap (an array, so that the reference interpreter allocates and reads
     objects in constant time, #37 — except that the first write or
     allocation inside a failure context copies the heap, which the context
-    keeps to roll back to). -/
+    keeps to roll back to). The output is kept newest byte first
+    (`outRev`), so that a `print` costs the length of what it prints and not
+    of everything printed before it (#782); `Glob.out` is the bytes in the
+    order they were printed. -/
 structure Glob where
-  out  : List Nat
+  outRev : List Nat
   heap : Array Obj
   deriving Repr, DecidableEq, Inhabited
+
+/-- The output, in the order it was printed. -/
+def Glob.out (g : Glob) : List Nat := g.outRev.reverse
 
 /-- Machine state: the current frame and the global part. -/
 structure St where
@@ -222,7 +228,7 @@ inductive Eval (P : Prog) : St → Expr → Res → St → Prop
       Eval P s (.ret e) r s₁
   | print_ok {s s₁ e v bs} :
       Eval P s e (.ok v) s₁ → printBytes v = some bs →
-      Eval P s (.print e) (.ok .void) { s₁ with g := { s₁.g with out := s₁.g.out ++ bs } }
+      Eval P s (.print e) (.ok .void) { s₁ with g := { s₁.g with outRev := bs.reverse ++ s₁.g.outRev } }
   | print_bad {s s₁ e v} :
       Eval P s e (.ok v) s₁ → printBytes v = none →
       Eval P s (.print e) (.err .type) s₁
@@ -281,6 +287,6 @@ def Prog.initSt : St := ⟨[], ⟨[], #[]⟩⟩
 
 /-- `P` run to completion gives outcome `r` and output `out`. -/
 def Runs (P : Prog) (r : Res) (out : List Nat) : Prop :=
-  ∃ fr heap, Eval P Prog.initSt (.call P.main []) r ⟨fr, ⟨out, heap⟩⟩
+  ∃ fr heap, Eval P Prog.initSt (.call P.main []) r ⟨fr, ⟨out.reverse, heap⟩⟩
 
 end OpenVerse

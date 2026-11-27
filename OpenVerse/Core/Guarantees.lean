@@ -30,7 +30,7 @@ theorem Prog.accepted {P : Prog} {S : Sigs} {Γs : List (List VTy)} {τ : VTy}
     (hc : P.check = true) (ht : P.checkTypes S Γs = true) (hctl : P.checkControl = true)
     (hm : S.fns[P.main]? = some ([], τ)) {r : Res} {out : List Nat} (hr : Runs P r out) :
     r.scopeErr = false ∧ r ≠ .err .type ∧ r ≠ .err .control ∧
-    (∃ fr heap, Eval P Prog.initSt (.call P.main []) r ⟨fr, ⟨out, heap⟩⟩ ∧
+    (∃ fr heap, Eval P Prog.initSt (.call P.main []) r ⟨fr, ⟨out.reverse, heap⟩⟩ ∧
       ∃ Ξ, HeapOK S Ξ heap ∧ ∀ v, r = .ok v → hasTy S.var Ξ v τ = true) ∧
     (∀ fn, P.fns[P.main]? = some fn → fn.decides = false → r ≠ .fail) ∧
     (∀ r' out', Runs P r' out' → r' = r ∧ out' = out) := by

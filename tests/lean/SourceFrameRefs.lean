@@ -18,7 +18,7 @@ private def int (n : Int) : Expr := .lit (.int n)
 
 private def initial : St :=
   { fr := [.ref 0, .int (-99), .tup [.int 2], .int 0],
-    g := { out := [], heap := #[{ tag := 0, fields := [.int 1] }] } }
+    g := { outRev := [], heap := #[{ tag := 0, fields := [.int 1] }] } }
 
 private def checkRun (name : String) (body : Expr) (value field : Int)
     (fns : List Fn := []) : IO Unit := do

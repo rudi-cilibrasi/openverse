@@ -23,7 +23,7 @@ open OpenVerse
 
 @[noinline] def forValue (bounded : Bool) (acc : List Value) : Value :=
   let p : Prog := { fns := [], main := 0 }
-  let s : St := { fr := [], g := { out := [], heap := #[] } }
+  let s : St := { fr := [], g := { outRev := [], heap := #[] } }
   if bounded then
     match evalForB p 2 2 0 (.lit .void) (.lit .void) s [] acc with
     | .res (.ok v, _) => v

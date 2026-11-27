@@ -85,7 +85,7 @@ def eval (P : Prog) : Nat → St → Expr → Option (Res × St)
   | n+1, s, .ret e => bindR (eval P n s e) fun v s₁ => some (.ret v, s₁)
   | n+1, s, .print e => bindR (eval P n s e) fun v s₁ =>
       match printBytes v with
-      | some bs => some (.ok .void, { s₁ with g := { s₁.g with out := s₁.g.out ++ bs } })
+      | some bs => some (.ok .void, { s₁ with g := { s₁.g with outRev := bs.reverse ++ s₁.g.outRev } })
       | none => some (.err .type, s₁)
 
 /-- Evaluate an argument list, left to right, with fuel `n`. -/
