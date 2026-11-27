@@ -1,5 +1,5 @@
 /-
-  OpenVerse Core — the bounded interpreter on a persistent heap (#780).
+  OpenVerse Core — the bounded interpreter on a persistent heap and array frames (#780).
 
   The semantics keeps the heap in an array (`Glob.heap`). A failure context
   holds the state it may roll back to, so the first write or allocation
@@ -9,6 +9,9 @@
   `evalP` is `evalB` on a state whose heap is a persistent map from
   addresses to objects, with its size (`PHeap`): a write shares all of the
   map but the path to one entry, so holding the old state costs nothing.
+  Its frame is an array where the semantics has a list, so that a slot is
+  read and written in constant time and not in time proportional to its
+  index: functions made by inlining choices have hundreds of slots.
   `evalP_toSt` proves that it gives `evalB`'s results, read through the
   array the map stands for, and `Prog.runB_eq_runP` puts it in `runB`'s
   place in compiled code. The semantics, `eval` and `evalB` are untouched.
@@ -50,12 +53,15 @@ structure GlobP where
 
 def GlobP.toGlob (g : GlobP) : Glob := ⟨g.outRev, g.heap.toArray⟩
 
-/-- `St` with a persistent heap. -/
+/-- `St` with a persistent heap, and its frame in an array: a slot is read
+    and written in constant time, where the semantics' list costs the
+    slot's index (a frame that a failure context still holds is copied by
+    the first write, as the list's prefix was by every write). -/
 structure StP where
-  fr : List Value
+  fr : Array Value
   g : GlobP
 
-def StP.toSt (s : StP) : St := ⟨s.fr, s.g.toGlob⟩
+def StP.toSt (s : StP) : St := ⟨s.fr.toList, s.g.toGlob⟩
 
 /-- `HeapOp.apply` on a persistent heap. -/
 def HeapOp.applyP : HeapOp → List Value → GlobP → Res × GlobP
@@ -90,9 +96,10 @@ def readSlotP (s : StP) (i : Nat) : Res :=
   | some v => .ok v
   | none => .err .slot
 
-/-- `writeSlot`. -/
-def writeSlotP (s : StP) (i : Nat) (v : Value) : Option StP :=
-  if i < s.fr.length then some { s with fr := s.fr.set i v } else none
+/-- `writeSlot` (the state is taken apart so that a frame nothing else holds
+    is updated in place). -/
+def writeSlotP : StP → Nat → Value → Option StP
+  | ⟨fr, g⟩, i, v => if i < fr.size then some ⟨fr.setIfInBounds i v, g⟩ else none
 
 mutual
 /-- `evalB` on a state with a persistent heap. -/
@@ -113,7 +120,7 @@ def evalP (P : Prog) : Nat → Nat → StP → Expr → Bounded (Res × StP)
   | n+1, d+1, s, .call f es => bindLB (evalListP P n d s es) fun vs s₁ =>
       match P.callable f vs.length with
       | none => .res (.err .call, s₁)
-      | some fn => (evalP P n d ⟨frameOf fn vs, s₁.g⟩ fn.body).bind fun
+      | some fn => (evalP P n d ⟨(frameOf fn vs).toArray, s₁.g⟩ fn.body).bind fun
         | none => .fuel
         | some (r, s₂) => .res (retOf r, ⟨s₁.fr, s₂.g⟩)
   | n+1, d+1, s, .ite c t e => (evalP P n d s c).bind fun
@@ -277,12 +284,16 @@ theorem StP.heapStep_toSt (op : HeapOp) (vs : List Value) (s : StP) :
   simp only [StP.heapStep, St.heapStep, StP.toSt]
   rw [← h]
 
-theorem readSlotP_toSt (s : StP) (i : Nat) : readSlotP s i = readSlot s.toSt i := rfl
+theorem readSlotP_toSt (s : StP) (i : Nat) : readSlotP s i = readSlot s.toSt i := by
+  unfold readSlotP readSlot
+  simp only [StP.toSt, Array.getElem?_toList]
+  cases s.fr[i]? <;> rfl
 
 theorem writeSlotP_toSt (s : StP) (i : Nat) (v : Value) :
     (writeSlotP s i v).map StP.toSt = writeSlot s.toSt i v := by
+  rcases s with ⟨fr, g⟩
   unfold writeSlotP writeSlot
-  by_cases h : i < s.fr.length <;> simp [h, StP.toSt]
+  by_cases h : i < fr.size <;> simp [h, StP.toSt]
 
 /-- A bounded result with a function applied to its value. -/
 def Bounded.map {α β : Type} (f : α → β) : Bounded α → Bounded β
@@ -343,7 +354,7 @@ theorem evalP_toSt (P : Prog) : ∀ n,
       | succ d =>
         cases e with
         | lit v => simp only [evalP, evalB]; rfl
-        | «local» i => simp only [evalP, evalB]; rfl
+        | «local» i => simp only [evalP, evalB, readSlotP_toSt]; rfl
         | assign i e =>
           simp only [evalP, evalB]
           rw [← ihE]
@@ -372,7 +383,7 @@ theorem evalP_toSt (P : Prog) : ∀ n,
           | none => rfl
           | some fn =>
             simp only []
-            have h := ihE d ⟨frameOf fn vs, s₁.g⟩ fn.body
+            have h := ihE d ⟨(frameOf fn vs).toArray, s₁.g⟩ fn.body
             simp only [StP.toSt] at h ⊢
             rw [← h]
             refine Bounded.bind_tr (f := StP.tr) fun z => ?_
@@ -455,7 +466,7 @@ theorem evalP_toSt (P : Prog) : ∀ n,
 
 /-- `Prog.runB` on a persistent heap. -/
 def Prog.runP (P : Prog) (n d : Nat) : Bounded (Res × List Nat) :=
-  match evalP P n d ⟨[], ⟨[], PHeap.empty⟩⟩ (.call P.main []) with
+  match evalP P n d ⟨#[], ⟨[], PHeap.empty⟩⟩ (.call P.main []) with
   | .fuel => .fuel
   | .res (r, s) => .res (r, s.g.outRev.reverse)
   | .deep => .deep
@@ -464,13 +475,13 @@ def Prog.runP (P : Prog) (n d : Nat) : Bounded (Res × List Nat) :=
     `Prog.runP` wherever `Prog.runB` is written. -/
 @[csimp] theorem Prog.runB_eq_runP : @Prog.runB = @Prog.runP := by
   funext P n d
-  have h := (evalP_toSt P n).1 d ⟨[], ⟨[], PHeap.empty⟩⟩ (.call P.main [])
-  have h0 : (⟨[], ⟨[], PHeap.empty⟩⟩ : StP).toSt = Prog.initSt := by
+  have h := (evalP_toSt P n).1 d ⟨#[], ⟨[], PHeap.empty⟩⟩ (.call P.main [])
+  have h0 : (⟨#[], ⟨[], PHeap.empty⟩⟩ : StP).toSt = Prog.initSt := by
     simp [StP.toSt, GlobP.toGlob, Prog.initSt]
   rw [h0] at h
   unfold Prog.runB Prog.runP
   rw [← h]
-  cases evalP P n d ⟨[], ⟨[], PHeap.empty⟩⟩ (.call P.main []) with
+  cases evalP P n d ⟨#[], ⟨[], PHeap.empty⟩⟩ (.call P.main []) with
   | fuel => rfl
   | deep => rfl
   | res z => rfl
