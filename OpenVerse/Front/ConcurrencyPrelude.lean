@@ -140,6 +140,7 @@ raceMark(A:[]void)<suspends><computes>:void = {}
 rushMark(A:[]void)<suspends><computes>:void = {}
 "
 
+set_option compiler.extract_closed false in
 /-- `concPrelude` in event mode (a program that uses an event type): the
     Book's rule that a `Signal` resumes its awaiters inside it, in the
     order they suspended, each until it waits again or ends (the Book's
@@ -158,7 +159,7 @@ rushMark(A:[]void)<suspends><computes>:void = {}
     for another pass. The two root fields are typed `?int` here and patched
     to the roots' type in the class table by the lowering; the prelude's
     code never reads them. -/
-def concPreludeEvents : String :=
+def concPreludeEvents : Thunk String := Thunk.mk fun _ =>
   let s := concPrelude
   let s := s.replace "    var CurTask:taskBase = taskBase{}\n"
     "    var CurTask:taskBase = taskBase{}\n    var CurRoot:?int = false\n    var Probe:logic = false\n    var Drain:int = 0\n    var MainTask:taskBase = taskBase{}\n"
@@ -173,6 +174,7 @@ def concPreludeEvents : String :=
   s.replace "    if (C.Now >= F.Wake):\n        return 1\n"
     "    if (C.Now >= F.Wake):\n        if (C.Drain > 0):\n            set C.Progress = true\n            return 0\n        return 1\n"
 
+set_option compiler.extract_closed false in
 /-- `concPreludeEvents` in await mode (a program that awaits a task): the
     Book's rule that a task's end resumes its awaiters inside it, in the
     order they registered, each until it waits again or ends (the Book's
@@ -185,8 +187,8 @@ def concPreludeEvents : String :=
     never sets a result nor signals its end, so its awaiters wait for ever.
     The field is `taskBase`'s, so that `taskEnd`, which the lowering's code
     calls, is not generic. -/
-def concPreludeAwaits : String :=
-  let s := concPreludeEvents
+def concPreludeAwaits : Thunk String := Thunk.mk fun _ =>
+  let s := concPreludeEvents.get
   let s := s.replace "    var Ev:logic = false\n" "    var Ev:logic = false\n    var Ends:?event(void) = false\n"
   s.replace "Await(T:task(t) where t:type)<suspends>:t =\n    WaitDone(T)\n    if (R := T.Result?) then R else Err()\n"
     "Await(T:task(t) where t:type)<suspends>:t =\n    if (R := T.Result?) then R else:\n        EvAwait(taskEnds(T))\n        if (V := T.Result?) then V else Err()\ntaskEnds(T:taskBase):event(void) =\n    if (E := T.Ends?) then E else:\n        F := event(void){}\n        set T.Ends = option{F}\n        F\ntaskEnd(T:taskBase):void =\n    if (E := T.Ends?) then signalAll(E, ())\n"
@@ -250,7 +252,7 @@ def withSubscriptions (s : String) : String :=
 def concTops (owned : List String := []) (events : Bool := false) (awaits : Bool := false)
     (usesSignalable : Bool := false) (subscribes : Bool := false) (scopes : Bool := false) :
     Except String (List STop) := do
-  let prelude := if awaits then concPreludeAwaits else if events then concPreludeEvents else concPrelude
+  let prelude := if awaits then concPreludeAwaits.get else if events then concPreludeEvents.get else concPrelude
   let prelude := if scopes then withScopes prelude else prelude
   let prelude := if subscribes then withSubscriptions prelude else prelude
   -- (both `Signal`s, the event's and the sticky event's, call the functions)

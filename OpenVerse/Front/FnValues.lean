@@ -347,13 +347,13 @@ partial def normS : STy → STy
 def subAt (anc : String → List String) (a0 b0 : STy) : Bool :=
   let a := normS a0
   let b := normS b0
-  reprStr a == reprStr b || match a, b with
+  a == b || match a, b with
     | .name "int", .name "rational" => true
     -- (any value to `void`, which accepts it, #724: `TyEnv.convertsAt`)
     | _, .name "void" => true
     | .name x, .name y => (anc x).contains y
     -- (a map is a weak map of its key and value types: `TyEnv.convertsAt`)
-    | .map k v, .app "weak_map" [k', v'] => reprStr k == reprStr k' && reprStr v == reprStr v'
+    | .map k v, .app "weak_map" [k', v'] => k == k' && v == v'
     | .fn ps es r, .fn qs fs u =>
       let (s, ts, r) := fnTyShape ps es r
       let (t, us, u) := fnTyShape qs fs u
@@ -363,7 +363,7 @@ def subAt (anc : String → List String) (a0 b0 : STy) : Bool :=
 /-- `subAt` at a result, and any result where an `any` is expected, which
     every value is (#724: `TyEnv.resultConvertsAt`). -/
 def resultSubAt (anc : String → List String) (r u : STy) : Bool :=
-  subAt anc r u || reprStr (normS u) == reprStr (STy.name "any")
+  subAt anc r u || normS u == STy.name "any"
 
 /-- A match of a generic function's types (its type parameters `tps`)
     against closed ones: each parameter's type, or none. -/
@@ -376,9 +376,9 @@ where
   | .name x, t =>
     if tps.contains x then
       match θ.lookup x with
-      | some u => if reprStr u == reprStr t then some θ else none
+      | some u => if u == t then some θ else none
       | none => some ((x, t) :: θ)
-    else if reprStr (STy.name x) == reprStr t then some θ else none
+    else if STy.name x == t then some θ else none
   | .arr a, .arr b | .opt a, .opt b => matchTy tps θ a b
   | .tup as, .tup bs => if as.length != bs.length then none else
       (as.zip bs).foldlM (fun θ (a, b) => matchTy tps θ a b) θ
@@ -391,7 +391,7 @@ where
     let (t, qs, u) := fnTyShape qs fs u
     if s != t then none else
       ((ps ++ [r]).zip (qs ++ [u])).foldlM (fun θ (a, b) => matchTy tps θ a b) θ
-  | a, b => if reprStr a == reprStr b then some θ else none
+  | a, b => if a == b then some θ else none
 
 /-- One generic value adapter, retaining symbolic types until its expected
     function type determines an instance. Empty `suffix` is the declared shape. -/
@@ -512,7 +512,7 @@ def genericAdapters (p : Pos) (n : String) (ps : List STy) (tps : List TParam) (
           let base ← original.upperBound
           let base := base.substNames σ
           if retained.any (fun kept => kept.name == original.name &&
-              kept.upperBound.any (fun upper => reprStr upper == reprStr base)) then none else
+              kept.upperBound.any (fun upper => upper == base)) then none else
             some (base, (STy.name original.name).substNames σ)
         out := out ++ [{
           suffix := s!"Unpack{k}",
@@ -658,7 +658,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
           let needed := !effs.contains "override" || match declOf (tops.length + 1) c m with
             | some (_, dtargs, doptional) =>
               dtargs.length != targs.length ||
-                (dtargs.zip targs).any (fun (a, b) => reprStr a != reprStr b) ||
+                (dtargs.zip targs).any (fun (a, b) => a != b) ||
                 doptional != (ownShape ps effs).1.optional
             | none => true
           -- Repeated, compound and hidden receiver arguments use ordinary
@@ -804,7 +804,7 @@ def desugar (tops : List STop) (extra : List STop := []) (requests : List (Strin
   -- (the arguments `ts` of shape `own` give `t`'s, `us`, as they are)
   let exactly (own t : Shape) (ts us : List STy) : Bool :=
     own.within t && let vs := own.select t ts
-    vs.length == us.length && (vs.zip us).all fun (a, b) => reprStr (normS a) == reprStr (normS b)
+    vs.length == us.length && (vs.zip us).all fun (a, b) => normS a == normS b
   for (p, n, ps, effs, r) in values do
     let (own, ts) := ownShape ps effs
     let mut k := 0

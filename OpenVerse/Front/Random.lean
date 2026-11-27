@@ -64,7 +64,9 @@ partial def mentionsRandom : SExpr → Bool
   | .ident _ n => n == "GetRandomInt"
   | e => e.children.any mentionsRandom
 
+set_option compiler.extract_closed false in
 /-- The helper, parsed (its names renamed). -/
-def randomTops : Except String (List STop) := parsePrelude randomPrelude randomNames
+def randomTops : Thunk (Except String (List STop)) :=
+  Thunk.mk fun _ => parsePrelude randomPrelude randomNames
 
 end OpenVerse.Front

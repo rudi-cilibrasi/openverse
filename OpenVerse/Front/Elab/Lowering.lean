@@ -318,7 +318,9 @@ lazycell(t:type) := class:
     LNext:?lazycell(t)
 "
 
-def lazyTops : Except String (List STop) := parsePrelude lazyPrelude ["lazycell", "LItem", "LNext"]
+set_option compiler.extract_closed false in
+def lazyTops : Thunk (Except String (List STop)) :=
+  Thunk.mk fun _ => parsePrelude lazyPrelude ["lazycell", "LItem", "LNext"]
 
 /-- The functions that a `for` whose body has several values calls
     (`Choice.forProducts`): the values of the row `A` from its `K`th on, in
@@ -332,8 +334,9 @@ forProduct(Rows:[][]t, I:int where t:type)<computes><decides>:[]t =
     if (Row := Rows[I]) then (array{forElems[Row, 0]} + forProduct[Rows, I + 1]) else array{}
 "
 
-def forProductTops : Except String (List STop) :=
-  parsePrelude forProductPrelude ["forElems", "forProduct", "A", "K", "X", "Rows", "Row", "I", "t"]
+set_option compiler.extract_closed false in
+def forProductTops : Thunk (Except String (List STop)) :=
+  Thunk.mk fun _ => parsePrelude forProductPrelude ["forElems", "forProduct", "A", "K", "X", "Rows", "Row", "I", "t"]
 
 /-- (#283) A `var` of a lazily taken recursive function that a return frame
     sets, as a cell (`Choice.cellVars`). -/
@@ -342,7 +345,9 @@ varcell(t:type) := class:
     var VCell:t
 "
 
-def varcellTops : Except String (List STop) := parsePrelude varcellPrelude ["varcell", "VCell"]
+set_option compiler.extract_closed false in
+def varcellTops : Thunk (Except String (List STop)) :=
+  Thunk.mk fun _ => parsePrelude varcellPrelude ["varcell", "VCell"]
 
 /-- Subscriptions (#210, #724), added with the concurrency prelude's events
     that keep them (`withSubscriptions`) to a program that subscribes: the

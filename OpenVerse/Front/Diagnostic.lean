@@ -296,8 +296,10 @@ diagFloat(dF:float)<computes>:string =
     ones it calls, and its `any` is unchanged). -/
 def bookNames : List String := ["ToDiagnostic", "diagnostic", "diagnosable"]
 
+set_option compiler.extract_closed false in
 /-- The helpers, parsed (their names renamed). -/
-def tops : Except String (List STop) := parsePrelude prelude preludeNames
+def tops : Thunk (Except String (List STop)) :=
+  Thunk.mk fun _ => parsePrelude prelude preludeNames
 
 /-- A name made of the letters and digits of `s`, every other character
     written as its code. -/
