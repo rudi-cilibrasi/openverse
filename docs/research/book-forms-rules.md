@@ -338,8 +338,9 @@ and value: the elaboration sees the source's type, so it takes the entries
 in place of the parser's indices (`elabFirstEntries`, `Elab/Expr.lean`,
 after the source's clause, `firstSourceName`). A `for`'s range
 binding takes a stated type `int` (`elabSource`, `Elab/For.lean`).
-**Left:** `first{X:=1..5, 3*X>10}`, whose clause is a tuple of a range's
-binding and a value (`first.versetest:206`).
+`first{X:=1..5, 3*X>10}`, whose clause is a tuple of a range's
+binding and a value (`first.versetest:206`), is taken since 2026-11-27: see
+below.
 
 With a generator, a filter that cannot fail is refused: "Only allow
 expressions that can fail (same as `for`)" (`first.versetest:28-31`,
@@ -348,9 +349,13 @@ expressions that can fail (same as `for`)" (`first.versetest:28-31`,
 a literal or a name, `checkFirstFilters`, before it). In `first{…}` a comma joins the
 clauses around it into a tuple: "Comma is not the same as semicolon",
 `(4,12) = first{X:=1..5, 3*X>10}` (`:204-208`), where openverse's clauses
-keep commas as separators; with a generator among them the parser refuses
-the comma ("a generator inside a tuple is not supported yet"), so that the
-case is refused, not given another value. Programs: the error test
+keep commas as separators; with a generator among them the parser makes
+the tuple: each clause that is not a generator or a definition is bound to
+a name, and the value is the tuple of the clauses' names, so `(4,12)`. It
+does so when every separator is a comma and no generator has an index;
+otherwise the comma is refused, so that the case is not given another
+value (`tests/verse/first_comma_tuple.verse`,
+`tests/errors/first_comma_generator.verse`). Programs: the error test
 `first_generator` is a valid program now, in `tests/verse` with its output.
 `first_map_generators` takes a map's values and entries, a string's and a
 range's, a failed entry's effects undone.

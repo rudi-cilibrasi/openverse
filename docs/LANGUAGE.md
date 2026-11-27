@@ -1929,9 +1929,12 @@ entity := class:
     with a generator, each filter must be able to fail, as a `for`'s
     (`first.versetest:28`, "same as `for`"; [the
     rule](research/book-remaining-rules.md#every-filter-of-a-for-can-fail)),
-    and commas are refused between the
-    clauses of `first{…}`, which join a tuple there, a generator inside it
-    not supported yet (`first.versetest:206`).
+    and commas between the clauses of `first{…}` join a tuple there
+    ("Comma is not the same as semicolon", `first.versetest:204-208`):
+    `first{X:=1..5, 3*X>10}` is `(4, 12)`, the values of its clauses at
+    the first iteration where all succeed, a generator's value its name's.
+    Mixed with `;` or a line break, or with an indexed generator
+    (`I->X : Xs`), commas are refused.
   - `assert{c}` is a runtime error (as `Err()`, with no message) unless
     `c` succeeds.
   Without a [choice](#choice), `first` is the first and only success, and

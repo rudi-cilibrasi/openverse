@@ -4661,7 +4661,7 @@ Tests/FlowControl/first.versetest:182	disagrees-refuses
 Tests/FlowControl/first.versetest:192	agrees
 Tests/FlowControl/first.versetest:197	agrees
 Tests/FlowControl/first.versetest:202	agrees
-Tests/FlowControl/first.versetest:206	disagrees-refuses
+Tests/FlowControl/first.versetest:206	agrees
 Tests/FlowControl/first.versetest:decls	agrees
 Tests/FlowControl/for.versetest:13	agrees
 Tests/FlowControl/for.versetest:17	agrees

@@ -1730,8 +1730,29 @@ partial def parsePrimary (stop : Nat) : PM SExpr := do
           else if k.isSym "}" || k.isSym ")" || k.isSym "]" then depth := depth - 1
           else if depth == 1 && k.isSym "," && comma.isNone then comma := some k
         let gen := cs.any fun | .gen .. | .decl _ _ _ false (.range ..) => true | _ => false
+        let mut semi := false
+        depth := 0
+        for k in toks do
+          if k.isSym "{" || k.isSym "(" || k.isSym "[" then depth := depth + 1
+          else if k.isSym "}" || k.isSym ")" || k.isSym "]" then depth := depth - 1
+          else if depth == 1 && (k.isSym ";" || k.bol) then semi := true
         if let some k := comma then
-          if gen then perr k "in first{…}, a comma joins its clauses into a tuple, and a generator inside a tuple is not supported yet: separate the clauses with ';'"
+          if gen then
+            -- (every separator a comma, each clause a generator of one name,
+            -- a definition or an expression: the tuple of their values, the
+            -- generators' and definitions' names and the expressions bound
+            -- to names in turn, so that each is evaluated once, in order)
+            let plain := cs.all fun
+              | .gen _ _ (some _) _ => false
+              | _ => true
+            if semi || !plain || (← peekT).isKw "do" then
+              perr k "in first{…}, a comma joins its clauses into a tuple, and a generator inside a tuple is supported only when every separator is a comma and no generator has an index: separate the clauses with ';'"
+            let named := cs.zipIdx.map fun (c, i) => match c with
+              | .gen _ x _ _ => (c, SExpr.ident c.pos x)
+              | .decl _ x _ _ _ => (c, SExpr.ident c.pos x)
+              | c => let n := s!"$ft{k.pos.line}_{k.pos.col}_{i}"
+                     (SExpr.decl c.pos n none false c, SExpr.ident c.pos n)
+            return firstOf (named.map (·.1)) (.tuple t.pos (named.map (·.2)))
       if cs.isEmpty then perr n1 "'first{}' needs a clause"
       if (← peekT).isKw "do" then
         bump
