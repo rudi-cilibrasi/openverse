@@ -238,7 +238,10 @@ partial def elabERaw (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R := do
     elabExprControl ctx se exp
 
 partial def elabExprMarkers (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R :=
-  elabExprMarkersWith elabE elabRefineExit (@elabConc) elabSpawn elabBranch elabApp (@elabFor) elabOneClauses elabFirstGo elabExprValues ctx se exp
+  elabExprMarkersWith elabE elabRefineExit (@elabConc) elabSpawn elabBranch (@elabFor) elabExprMarkersLate ctx se exp
+
+partial def elabExprMarkersLate (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R :=
+  elabExprMarkersLateWith elabE elabApp (@elabFor) elabOneClauses elabFirstGo elabExprValues ctx se exp
 
 partial def elabExprValues (ctx : Ctx) (se : SExpr) (exp : Option Ty) : EM R :=
   elabExprValuesWith elabE (elabSeqIn true) elabApp ratCall elabCmp (@elabMember) elabConstruct elabMapLit ctx se exp
