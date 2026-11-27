@@ -50,8 +50,8 @@ def Bounded.ofOption {α : Type} : Option α → Bounded α
   | .deep => .deep
 
 /-- `bindR` for bounded evaluations. -/
-@[inline] def bindRB (x : Bounded (Res × St)) (k : Value → St → Bounded (Res × St)) :
-    Bounded (Res × St) :=
+@[inline] def bindRB {σ : Type} (x : Bounded (Res × σ)) (k : Value → σ → Bounded (Res × σ)) :
+    Bounded (Res × σ) :=
   match x with
   | .deep => .deep
   | .fuel => .fuel
@@ -62,8 +62,8 @@ def Bounded.ofOption {α : Type} : Option α → Bounded α
   | .res (.err e, s) => .res (.err e, s)
 
 /-- `bindL` for bounded evaluations. -/
-@[inline] def bindLB (x : Bounded (LRes × St)) (k : List Value → St → Bounded (Res × St)) :
-    Bounded (Res × St) :=
+@[inline] def bindLB {σ : Type} (x : Bounded (LRes × σ)) (k : List Value → σ → Bounded (Res × σ)) :
+    Bounded (Res × σ) :=
   match x with
   | .deep => .deep
   | .fuel => .fuel

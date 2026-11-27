@@ -5,6 +5,7 @@ import OpenVerse.Core.Prims
 import OpenVerse.Core.Semantics
 import OpenVerse.Core.Interp
 import OpenVerse.Core.Bounded
+import OpenVerse.Core.PersistentHeap
 import OpenVerse.Core.Adequacy
 import OpenVerse.Core.Derived
 import OpenVerse.Core.Effects

@@ -14,6 +14,8 @@ thms=(
   "Bounded:evalB_sound:the depth-bounded interpreter of openverse run is eval whenever it does not stop for depth"
   "Bounded:evalB_complete:with a depth budget at least the fuel, the bounded interpreter is eval"
   "Bounded:Prog.runB_sound:openverse run computes Prog.run whenever it does not hit its depth bound"
+  "PersistentHeap:evalP_toSt:the interpreter on a persistent heap gives the depth-bounded interpreter's results"
+  "PersistentHeap:Prog.runB_eq_runP:compiled code runs the interpreter on a persistent heap wherever Prog.runB is written"
   "Derived:ite_rollback:a failed if condition is rolled back"
   "Derived:notE_ok:a successful not e discards the effects of e"
   "Derived:notE_notE_ok:not not e is a pure test"
