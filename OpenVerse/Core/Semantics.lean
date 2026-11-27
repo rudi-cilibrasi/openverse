@@ -29,7 +29,8 @@ structure Obj where
     heap (an array, so that the reference interpreter allocates and reads
     objects in constant time, #37 — except that the first write or
     allocation inside a failure context copies the heap, which the context
-    keeps to roll back to). The output is kept newest byte first
+    keeps to roll back to; the compiled runner keeps it in a persistent map
+    instead, `Core/PersistentHeap.lean`, #780). The output is kept newest byte first
     (`outRev`), so that a `print` costs the length of what it prints and not
     of everything printed before it (#782); `Glob.out` is the bytes in the
     order they were printed. -/

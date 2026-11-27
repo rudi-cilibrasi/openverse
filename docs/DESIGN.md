@@ -60,6 +60,16 @@ The state keeps the output newest byte first (`Glob.outRev`), so that a
 before it (#782). `Glob.out` is the bytes in the order printed, and that
 is the output `Runs` and `Prog.run` speak of.
 
+The heap is an array in the semantics, and a failure context holds the
+state it may roll back to. Run literally, the first write or allocation
+inside each failure context copies the whole heap, so a program that takes
+N values through failure contexts costs about N² (#780). The compiled
+runner therefore evaluates on a second representation, a persistent map
+from addresses to objects (`Core/PersistentHeap.lean`): `evalP` is `evalB`
+with that heap, `evalP_toSt` proves it gives `evalB`'s results when the map
+is read as an array, and `Prog.runB_eq_runP` substitutes it in compiled
+code. The semantics and the theorems about it do not mention it.
+
 Because Verse has no closures and frames are not shared, a callee cannot
 write its caller's frame. So rollback only ever restores slots of the frames
 that are live. The C runtime implements this with one value stack and an

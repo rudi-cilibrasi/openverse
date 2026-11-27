@@ -82,6 +82,26 @@ out of date. The proofs are in `OpenVerse/Core/`.
 @Prog.runB_sound : ∀ {P : Prog} {n d : Nat}, P.runB n d ≠ Bounded.deep → P.runB n d = Bounded.ofOption (P.run n)
 ```
 
+## `evalP_toSt`: the interpreter on a persistent heap gives the depth-bounded interpreter's results
+
+`OpenVerse/Core/PersistentHeap.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+evalP_toSt : ∀ (P : Prog) (n : Nat),
+  (∀ (d : Nat) (s : StP) (e : Expr), Bounded.map StP.tr (evalP P n d s e) = evalB P n d s.toSt e) ∧
+    (∀ (d : Nat) (s : StP) (es : List Expr), Bounded.map StP.tr (evalListP P n d s es) = evalListB P n d s.toSt es) ∧
+      ∀ (d i : Nat) (filt body : Expr) (s : StP) (vs acc : List Value),
+        Bounded.map StP.tr (evalForP P n d i filt body s vs acc) = evalForB P n d i filt body s.toSt vs acc
+```
+
+## `Prog.runB_eq_runP`: compiled code runs the interpreter on a persistent heap wherever Prog.runB is written
+
+`OpenVerse/Core/PersistentHeap.lean`; axioms: [propext, Classical.choice, Quot.sound]
+
+```lean
+Prog.runB_eq_runP : Prog.runB = Prog.runP
+```
+
 ## `ite_rollback`: a failed if condition is rolled back
 
 `OpenVerse/Core/Derived.lean`; axioms: [propext, Classical.choice, Quot.sound]
