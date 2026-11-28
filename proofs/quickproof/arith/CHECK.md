@@ -1,6 +1,6 @@
 # openverse_arith: harness check
 
-By `tools/qp check` on 2026-11-12 00:43: upstream 805fd2194515, quickproof fab76ef.
+By `tools/qp check` on 2026-11-28 02:55: upstream 92b862fa4f5f, quickproof fab76ef.
 
 ## Native runs (ASan/UBSan, 3000 runs per harness)
 

@@ -1,17 +1,17 @@
 # qp verify of openverse_arith
 
-Replayed on 2026-11-12 by `scripts/check-quickproof.sh --check arith`,
+Replayed on 2026-11-28 by `scripts/check-quickproof.sh --check arith`,
 with the published image pinned in the script. The C contract is assembled
-from `805fd2194515789c7ad0f43689071113031e75f2` (scalar float math #490).
-Only `openverse.h` changed among this law's C dependencies; the primitive
-range now ends at 64. This law does not prove libm accuracy.
+from `92b862fa4f5fffe7e9b753448e5619b82e076bfe` (a map's lookups, mapGet and mapFind, #795).
+The pinned sources of this project are unchanged but for the header's two
+new primitive codes.
 
-# Verification of <work> at a2649522ce68
+# Verification of <work> at eed373069261
 
-- date: 2026-11-12 00:44
+- date: 2026-11-28 02:56
 - framework: quickproof/ at fab76ef826ae (not a release tag of this verifier's repository)
 - framework trusted files (16: the statement, the libc, the translation chain): identical to this verifier (/opt/quickproof)
-- contract commit: a49bbb60ed94 (`contract`)
+- contract commit: 25b5de52c217 (`contract`)
 - files changed since the contract: 7; frozen files changed: none
 - regenerated code.v: identical to the committed files
 - the statements compared with: the contract commit's own files with no proof in them (none) and its unit files (src/units.v or src/units/*.v); generated again: src/contracts/arith_exact.v
@@ -19,7 +19,7 @@ range now ends at 64. This law does not prove libm accuracy.
 - `Admitted`/`admit`/`Axiom`/`Parameter`/`Conjecture` in the Coq sources of the proof (src/ and the other files of _CoqProject; comments excluded): none
 - `Print Assumptions` was printed once for all theorems together (of a definition that names each of them): the axioms given for each theorem are those of all of them, an upper bound of its own
 - the framework after the translation and the builds: unchanged
-- the run: 2 build jobs on 12 CPUs, load 4.0 at the start; checks before the build 0 min, the build and probes 3 min, the contract commit 0 min, in all 3 min
+- the run: 12 build jobs on 24 CPUs, load 26.5 at the start; checks before the build 0 min, the build and probes 4 min, the contract commit 0 min, in all 4 min
 
 | theorem | result | Print Assumptions |
 |---|---|---|

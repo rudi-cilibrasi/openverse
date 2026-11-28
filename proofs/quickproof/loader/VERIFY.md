@@ -1,17 +1,17 @@
 # qp verify of openverse_loader
 
-Replayed on 2026-11-12 by `scripts/check-quickproof.sh --check loader`,
+Replayed on 2026-11-28 by `scripts/check-quickproof.sh --check loader`,
 with the published image pinned in the script. The C contract is assembled
-from `805fd2194515789c7ad0f43689071113031e75f2` (scalar float math #490).
+from `92b862fa4f5fffe7e9b753448e5619b82e076bfe` (a map's lookups, mapGet and mapFind, #795).
 The loader source is unchanged; the header and the proof specification
-now permit primitive codes through 64.
+now permit primitive codes through 66.
 
-# Verification of <work> at 283628c73cd0
+# Verification of <work> at 0dea9f32a575
 
-- date: 2026-11-12 00:48
+- date: 2026-11-28 03:41
 - framework: quickproof/ at fab76ef826ae (not a release tag of this verifier's repository)
 - framework trusted files (16: the statement, the libc, the translation chain): identical to this verifier (/opt/quickproof)
-- contract commit: 87fb0fa3174d (`contract`)
+- contract commit: 07059c010130 (`contract`)
 - files changed since the contract: 18; frozen files changed: none
 - regenerated code.v: identical to the committed files
 - the statements compared with: the contract commit's own files with no proof in them (none) and its unit files (src/units.v or src/units/*.v); generated again: src/contracts/loader_wellscoped.v
@@ -19,7 +19,7 @@ now permit primitive codes through 64.
 - `Admitted`/`admit`/`Axiom`/`Parameter`/`Conjecture` in the Coq sources of the proof (src/ and the other files of _CoqProject; comments excluded): none
 - `Print Assumptions` was printed once for all theorems together (of a definition that names each of them): the axioms given for each theorem are those of all of them, an upper bound of its own
 - the framework after the translation and the builds: unchanged
-- the run: 2 build jobs on 12 CPUs, load 3.7 at the start; checks before the build 0 min, the build and probes 40 min, the contract commit 0 min, in all 40 min
+- the run: 12 build jobs on 24 CPUs, load 28.1 at the start; checks before the build 0 min, the build and probes 35 min, the contract commit 0 min, in all 35 min
 
 | theorem | result | Print Assumptions |
 |---|---|---|
