@@ -11,6 +11,7 @@ lake env lean --run tests/lean/MetadataStorage.lean
 lake env lean --run tests/lean/MetadataScheduleProofs.lean
 lake env lean --run tests/lean/MetadataConcurrency.lean
 lake env lean --run tests/lean/MetadataSignals.lean
+lake env lean --run tests/lean/MetadataMaps.lean
 lake env lean --run tests/lean/MetadataGetters.lean
 lake env lean --run tests/lean/MetadataTuples.lean "$out"
 for metadata in false true; do
