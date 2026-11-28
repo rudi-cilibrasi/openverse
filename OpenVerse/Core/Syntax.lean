@@ -59,6 +59,11 @@ inductive Prim where
   | fpow | fatan2 | fisFinite
   -- hyperbolic functions and their inverses (#490)
   | fsinh | fcosh | ftanh | fasinh | facosh | fatanh
+  -- maps (#795): a map is the array of its key-value pairs, in the order
+  -- the keys were first given; `mapGet [m, k]` is the value of the first
+  -- pair whose key equals `k`, `mapFind [m, k]` that pair's position (both
+  -- failable: no such pair)
+  | mapGet | mapFind
   deriving Repr, DecidableEq, Inhabited
 
 /-- Operations on the heap (#20). Each is a function of the values of its

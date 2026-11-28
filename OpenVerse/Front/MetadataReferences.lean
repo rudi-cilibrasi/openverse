@@ -224,6 +224,8 @@ private partial def expr (fns : Array Fn) (scalarReturns : Array Bool) (stack : 
           | some (.lit (.int i)) => if i ≥ 0 then load out.memory (args.headD [0]) i.toNat else []
           | _ => elements out.memory (args.headD [0])
         (value, out.memory)
+      -- (#795) an index at an unknown position, then the pair's second column
+      | .mapGet => (load out.memory (elements out.memory (args.headD [0])) 1, out.memory)
       | .arrSet =>
         let value := union (elements out.memory (args.headD [0])) (args[2]?.getD [0])
         container out.memory site [value]
@@ -394,7 +396,7 @@ private partial def dependency (signatures : Array Signature)
     | .heap (.set _) _ => return { out with value := values[1]?.getD [] }
     | .heap _ _ => return { out with value := all }
     | .prim op _ =>
-      if op == .eq || op == .ne || op == .index then
+      if op == .eq || op == .ne || op == .index || op == .mapGet then
         return { out with value := values.headD [] }
       if op == .arrSet then
         return { out with value := union (values.headD []) (values[2]?.getD []) }

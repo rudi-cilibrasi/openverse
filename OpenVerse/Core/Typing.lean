@@ -573,6 +573,8 @@ inductive PrimTy : Prim → List VTy → VTy → Prop
   | concat {t} : PrimTy .concat [.arr t, .arr t] (.arr t)
   | index {t} : PrimTy .index [.arr t, .int] t
   | len {t} : PrimTy .len [.arr t] .int
+  | mapGet {k k' t} : PrimTy .mapGet [.arr (.tup [k, t]), k'] t
+  | mapFind {k k' t} : PrimTy .mapFind [.arr (.tup [k, t]), k'] .int
   | arrSet {t} : PrimTy .arrSet [.arr t, .int, t] (.arr t)
   | flatten {t} : PrimTy .flatten [.arr (.arr t)] (.arr t)
   | range : PrimTy .range [.int, .int] (.arr .int)

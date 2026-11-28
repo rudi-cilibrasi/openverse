@@ -209,7 +209,10 @@ int    vx_store_move_out(vx_store *s, uint8_t *out, size_t ocap);
 #define VX_P_FASINH   62
 #define VX_P_FACOSH   63
 #define VX_P_FATANH   64
-#define VX_P_LAST     64
+/* a map's lookups (#795): a map is the array of its key-value pairs */
+#define VX_P_MAPGET   65
+#define VX_P_MAPFIND  66
+#define VX_P_LAST     66
 
 /*
  * One node.  Child indices are into the node table of the same function.

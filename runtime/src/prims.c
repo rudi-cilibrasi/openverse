@@ -388,6 +388,35 @@ static void arr_set(vx_ctx *c, const vx_val *x, int64_t i, const vx_val *v, vx_r
     vx_res_ok(r, VX_T_ARR, o);
 }
 
+/* The position of the first element of the array xs that is a pair whose key
+   equals k (Value.keyIs: `.tup [k', _]` with `veq k' k`), or the array's
+   length when there is none; VX_E_NOMEM as vx_equal's. */
+static int map_scan(vx_ctx *c, const vx_val *xs, const vx_val *k, size_t *at)
+{
+    size_t n = vx_obj_len(&c->heap, xs->bits), i;
+    const vx_val *ps = vx_obj_elems(&c->heap, xs->bits);
+    int eq, rc;
+    for (i = 0; i < n; i++) {
+        const vx_val *p = &ps[i], *key;
+        if (p->tag != VX_T_TUP || vx_obj_len(&c->heap, p->bits) != 2)
+            continue;
+        key = vx_obj_elems(&c->heap, p->bits);
+        /* (two ints within 64 bits, or two chars: equal when their bits are;
+           vx_equal decides the same, by a longer way) */
+        if (key->tag == k->tag && (k->tag == VX_T_INT || k->tag == VX_T_CHAR)) {
+            if (key->bits == k->bits)
+                break;
+            continue;
+        }
+        if ((rc = vx_equal(&c->heap, key, k, &eq)) != VX_OK)
+            return rc;
+        if (eq)
+            break;
+    }
+    *at = i;
+    return VX_OK;
+}
+
 void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n, vx_res *r)
 {
     int64_t z = 0;
@@ -558,6 +587,24 @@ void vx_prim_apply(vx_ctx *c, uint32_t op, uint32_t k, const vx_val *a, size_t n
         if (n == 3 && is(&a[0], VX_T_ARR) && is(&a[1], VX_T_BIG)) { vx_res_fail(r); return; }
         break;
     /* | .tupGet k, [.tup vs] => match vs[k]? with | some v => .ok v | none => .err .type */
+    /* | .mapGet, [.arr ps, k] => match ps.find? (Value.keyIs k) with
+         | some (.tup [_, v]) => .ok v | _ => .fail
+       | .mapFind, [.arr ps, k] => match ps.findIdx? (Value.keyIs k) with
+         | some i => .ok (.int i) | none => .fail */
+    case VX_P_MAPGET:
+    case VX_P_MAPFIND:
+        if (n == 2 && is(&a[0], VX_T_ARR)) {
+            size_t at;
+            if (map_scan(c, &a[0], &a[1], &at) != VX_OK) { nomem(r); return; }
+            if (at >= vx_obj_len(&c->heap, a[0].bits))
+                vx_res_fail(r);
+            else if (op == VX_P_MAPFIND)
+                vx_res_ok(r, VX_T_INT, (uint64_t)at);
+            else
+                ok_copy(r, &vx_obj_elems(&c->heap, vx_obj_elems(&c->heap, a[0].bits)[at].bits)[1]);
+            return;
+        }
+        break;
     case VX_P_TUPGET:
         if (n == 1 && is(&a[0], VX_T_TUP)) {
             if ((size_t)k < vx_obj_len(&c->heap, a[0].bits))

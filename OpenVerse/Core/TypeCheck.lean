@@ -771,6 +771,16 @@ def tcPrim : Prim → List Expr → Option VTy → Option VTy
   | .len, [a], m => match tc a none with
     | some (.arr _) => expect S.var m .int
     | _ => none
+  -- a map's lookups (#795): the map is an array of pairs; the key is any
+  -- well-typed expression, as an operand of `eq` is
+  | .mapGet, [a, k], m => match tc a none with
+    | some (.arr (.tup [_, t])) =>
+      if (tc k none).isSome || (tc k (some VTy.void)).isSome then expect S.var m t else none
+    | _ => none
+  | .mapFind, [a, k], m => match tc a none with
+    | some (.arr (.tup [_, _])) =>
+      if (tc k none).isSome || (tc k (some VTy.void)).isSome then expect S.var m .int else none
+    | _ => none
   -- with an expected array type, the operands are checked against it (so a
   -- narrower array can be updated with a wider element)
   | .arrSet, [a, i, v], some (.arr t) =>
@@ -1124,6 +1134,26 @@ theorem tcPrim_sound_of {op : Prim} {es : List Expr} {m τ} (ih : ∀ e ∈ es, 
     split at h
     · next t ha =>
       exact expect_typed h (.prim (.cons (inf (by simp) ha) .nil) .len)
+    · simp at h
+  | mapGet =>
+    rcases es with _ | ⟨a, _ | ⟨b, _ | ⟨c, rest⟩⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
+    split at h
+    · next κ t ha =>
+      split at h
+      · next hb =>
+        obtain ⟨σ, hσ⟩ := wt (e := b) (by simp) hb
+        exact expect_typed h (.prim (.cons (inf (by simp) ha) (.cons hσ .nil)) .mapGet)
+      · simp at h
+    · simp at h
+  | mapFind =>
+    rcases es with _ | ⟨a, _ | ⟨b, _ | ⟨c, rest⟩⟩⟩ <;> simp only [tcPrim] at h <;> try (simp at h; done)
+    split at h
+    · next κ t ha =>
+      split at h
+      · next hb =>
+        obtain ⟨σ, hσ⟩ := wt (e := b) (by simp) hb
+        exact expect_typed h (.prim (.cons (inf (by simp) ha) (.cons hσ .nil)) .mapFind)
+      · simp at h
     · simp at h
   | arrSet =>
     rcases es with _ | ⟨a, _ | ⟨b, _ | ⟨c, _ | ⟨d, rest⟩⟩⟩⟩ <;> try (cases m <;> simp [tcPrim] at h; done)

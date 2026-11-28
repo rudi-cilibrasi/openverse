@@ -137,6 +137,13 @@ Existing codes retain their values;
 older runtimes reject programs using these new codes. `Lerp` uses the
 existing floating arithmetic primitives and needs no new code.
 
+A map's lookups (#795): 65 mapGet, 66 mapFind. A map is the array of its
+key-value pairs in the order the keys were first given. Both take that array
+and a key: `mapGet` gives the value of the first pair whose key equals the
+key, `mapFind` that pair's position, and each fails when there is none.
+Equality is the one of code 13. Older runtimes reject programs that use
+these codes.
+
 ## What the loader accepts
 
 `vx_load` (`runtime/src/load.c`) accepts a buffer exactly when it parses to
@@ -147,7 +154,7 @@ the end with no bytes left over and:
 3. every child index of node `j` is `< j`;
 4. every slot (LOCAL, ASSIGN, FOR) is `< nslots` of its function;
 5. every CALL names a function `< nfns` whose `arity` equals the call's `n`;
-6. every PRIM code is `≤ 64`, `k = 0` unless the code is 25, every LIT
+6. every PRIM code is `≤ 66`, `k = 0` unless the code is 25, every LIT
    tag is `≤ 6` with LOGIC `≤ 1`, and every HEAP op is `≤ 4`, with `k = 0`
    for `tag`;
 7. the counts stay within the limits in `runtime/include/openverse.h`.
