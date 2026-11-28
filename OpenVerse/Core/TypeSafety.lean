@@ -364,6 +364,8 @@ theorem PrimTy.subst (θ : Nat → VTy) {op ts τ} (h : PrimTy op ts τ) :
   | concat => simpa using PrimTy.concat
   | index => simpa using PrimTy.index
   | len => simpa using PrimTy.len
+  | mapGet => simpa using PrimTy.mapGet
+  | mapFind => simpa using PrimTy.mapFind
   | arrSet => simpa using PrimTy.arrSet
   | flatten => simpa using PrimTy.flatten
   | range => simpa using PrimTy.range
@@ -1472,6 +1474,24 @@ theorem prim_typed {op ts τ ρ} {vs : List Value} (hp : PrimTy op ts τ) (hv : 
     all_goals
       obtain ⟨xs, rfl, _⟩ := hasTy_arr hv
       simp [Prim.apply, ResOK, hasTy]
+  | mapGet =>
+    rcases vs with _ | ⟨a, _ | ⟨b, _ | ⟨_, _⟩⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
+    all_goals
+      obtain ⟨ps, rfl, hp⟩ := hasTy_arr hv.1
+      simp only [Prim.apply]
+      split
+      · next x v hfind =>
+        have hmem : Value.tup [x, v] ∈ ps.toList := by simpa using Array.mem_of_find?_eq_some hfind
+        have hpair := allTy_iff.mp hp _ hmem
+        simp only [hasTy, allTys, Bool.and_eq_true, and_true] at hpair
+        exact hpair.2
+      · simp [ResOK]
+  | mapFind =>
+    rcases vs with _ | ⟨a, _ | ⟨b, _ | ⟨_, _⟩⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
+    all_goals
+      obtain ⟨ps, rfl, _⟩ := hasTy_arr hv.1
+      simp only [Prim.apply]
+      split <;> simp [ResOK, hasTy]
   | arrSet =>
     rcases vs with _ | ⟨a, _ | ⟨b, _ | ⟨c, _ | ⟨_, _⟩⟩⟩⟩ <;> simp only [allTys, Bool.and_eq_true, Bool.false_eq_true, and_false, and_true] at hv
     all_goals

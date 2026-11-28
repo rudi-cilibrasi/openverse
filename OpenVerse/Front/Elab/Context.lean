@@ -2689,7 +2689,7 @@ def coerce (p : Pos) (r : R) (target : Ty) : EM Expr := do
   -- (and a call of a function whose result is `false`, which Verse Core
   -- gives `void`, `Suspend()<suspends>:false`)
   let rec projection : Expr → Bool
-    | .local _ | .prim (.tupGet _) _ | .prim .index _ | .prim .query _ | .heap (.get _) _ | .call .. => true
+    | .local _ | .prim (.tupGet _) _ | .prim .index _ | .prim .mapGet _ | .prim .query _ | .heap (.get _) _ | .call .. => true
     | .seq _ b => projection b
     | _ => false
   if r.ty == .never && target != .never && target != .void && projection r.e then
@@ -3450,17 +3450,15 @@ def joinedChoiceResult (ctx : Ctx) (plan : ChoiceTypes.Plan) (lift : Choice.Firs
 
 
 /-- `M[k]` on the map in slot `tm` with the key in slot `tk`: the value of the
-    first pair whose key equals `k` (fails when there is none). `tp` is a
-    slot for the pairs. -/
-def mapLookup (tm tk tp : Nat) : Expr :=
-  .prim .index [.forE tp (.local tm) (.prim .eq [.prim (.tupGet 0) [.local tp], .local tk])
-      (.prim (.tupGet 1) [.local tp]), .lit (.int 0)]
+    first pair whose key equals `k` (fails when there is none), a native scan
+    (`Prim.mapGet`, #795). `tp` was the slot of the interpreted scan's pairs. -/
+def mapLookup (tm tk _tp : Nat) : Expr :=
+  .prim .mapGet [.local tm, .local tk]
 
-/-- The position of key `k` (slot `tk`) in the map in slot `tm` (fails when absent). -/
-def mapFind (tm tk ti : Nat) : Expr :=
-  .prim .index [.forE ti (.prim .range [.lit (.int 0), .prim .sub [.prim .len [.local tm], .lit (.int 1)]])
-      (.prim .eq [.prim (.tupGet 0) [.prim .index [.local tm, .local ti]], .local tk]) (.local ti),
-    .lit (.int 0)]
+/-- The position of key `k` (slot `tk`) in the map in slot `tm` (fails when
+    absent): `Prim.mapFind` (#795). -/
+def mapFind (tm tk _ti : Nat) : Expr :=
+  .prim .mapFind [.local tm, .local tk]
 
 /-- Insert or update `(k, v)` (slots `tk`, `tv`) in the map in slot `tm`, in
     place when the key exists, at the end otherwise (Book of Verse §9.3). -/

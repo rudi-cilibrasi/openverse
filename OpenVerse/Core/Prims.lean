@@ -229,6 +229,16 @@ def Prim.apply (op : Prim) (vs : List Value) : Res :=
     | [.arr xs, .int i, v] =>
       if 0 ≤ i ∧ i.toNat < xs.size then .ok (Value.ofArray (xs.setIfInBounds i.toNat v)) else .fail
     | _ => .err .type
+  | .mapGet => match vs with
+    | [.arr ps, k] => match ps.find? (Value.keyIs k) with
+      | some (.tup [_, v]) => .ok v
+      | _ => .fail
+    | _ => .err .type
+  | .mapFind => match vs with
+    | [.arr ps, k] => match ps.findIdx? (Value.keyIs k) with
+      | some i => .ok (Value.ofInt i)
+      | none => .fail
+    | _ => .err .type
   | .tupGet k => match vs with
     | [.tup vs] => match vs[k]? with
       | some v => .ok v
@@ -357,7 +367,7 @@ def Prim.apply (op : Prim) (vs : List Value) : Res :=
 def Prim.failable : Prim → Bool
   | .floorDiv | .ceilDiv | .quotient | .modulo => true
   | .lt | .le | .gt | .ge | .eq | .ne => true
-  | .query | .index | .arrSet | .fail => true
+  | .query | .index | .arrSet | .fail | .mapGet | .mapFind => true
   | .flt | .fle | .fgt | .fge | .ffloor | .fceil | .fround | .ftrunc | .fisFinite => true
   | _ => false
 

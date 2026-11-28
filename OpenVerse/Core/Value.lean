@@ -451,6 +451,12 @@ partial def render : Value → String
   | .some v => "option{" ++ render v ++ "}"
   | .ref a => s!"ref {a}"
 
+/-- Whether `p` is a pair whose key equals `k` (Verse's equality, `veq`):
+    the test of a map's lookup, a map being the array of its pairs. -/
+def keyIs (k : Value) : Value → Bool
+  | .tup [k', _] => veq k' k
+  | _ => false
+
 end Value
 
 /-- Runtime errors. They end the whole program; failure contexts do not catch them. -/

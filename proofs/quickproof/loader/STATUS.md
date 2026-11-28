@@ -1,9 +1,10 @@
 # Status of openverse_loader
 
 - Law: `project/harness/loader_wellscoped.c`, pinned to openverse commit
-  805fd2194515 (scalar float math, #490). The loader source is unchanged;
-  `VX_P_LAST` in `openverse.h` increases from 58 to 64 for six unary
-  hyperbolic operations. `proof/src/proof/Specs.v` follows that bound;
+  92b862fa4f5f (a map's lookups, #795). The loader source is unchanged;
+  `VX_P_LAST` in `openverse.h` increases from 64 to 66 for `mapGet` and
+  `mapFind` (before that, from 58 to 64 for six unary hyperbolic
+  operations, #490). `proof/src/proof/Specs.v` follows that bound;
   the remaining proof replays unchanged. Earlier extensions added float
   literals via `fofBits` (#127), mathematical operations (#132), and HEAP
   nodes/REF literals (#31). The law still checks HEAP operations and tag

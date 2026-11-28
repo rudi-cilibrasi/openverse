@@ -34,7 +34,10 @@ field `get` and `set`, `tag`, `isTag`). Every surface construct is a
   [Choice](#choice-iteration-over-alternatives));
 - comparison chains use temporaries, so each operand is evaluated once;
 - structs are tuples, enums are ints, and maps are arrays of pairs in
-  insertion order;
+  insertion order; a lookup `M[k]` and the search of a key in `set M[k] = v`
+  are the primitives `mapGet` and `mapFind`, a native scan to the first pair
+  whose key is equal (#795: as interpreted loops over the pairs they made
+  maps of a few thousand entries unusable);
 - a generic function is one Core function with type variables, and a
   hidden argument per type parameter.
 

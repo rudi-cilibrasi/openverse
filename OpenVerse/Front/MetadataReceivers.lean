@@ -84,6 +84,9 @@ private partial def infer (env : TyEnv) (types : Array Ty)
   | .prim .index [values, _] => do
     let .arr ty ← infer env types fnReturns values | none
     return ty
+  | .prim .mapGet [values, _] => do
+    let .arr (.tup [_, ty]) ← infer env types fnReturns values | none
+    return ty
   | .prim .query [value] => do
     let .opt ty ← infer env types fnReturns value | none
     return ty

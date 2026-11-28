@@ -471,7 +471,7 @@ private def restoreTest (c : Configuration) (actor : Nat) : Option Configuration
 private def mayFail : Expr → Bool
   | .heap (.isTag _) _ => true
   | .prim .query [.lit (.logic true)] => false
-  | .prim op _ => [.query, .index, .lt, .le, .gt, .ge, .eq, .ne,
+  | .prim op _ => [.query, .index, .mapGet, .mapFind, .lt, .le, .gt, .ge, .eq, .ne,
       .flt, .fle, .fgt, .fge].contains op
   | _ => false
 
@@ -958,6 +958,9 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
       -- Equality and inequality return the left operand; an array index selects a
       -- payload without becoming part of it. All operands still run above.
       | .eq, _ | .ne, _ | .index, _ => some (args.headD false)
+      -- A map's lookup (#795) is an index at an unknown position and then
+      -- the pair's second column: the map's role, as that index has.
+      | .mapGet, _ => some (args.headD false)
       | .arrSet, _ => some (args.headD false || args[2]?.getD false)
       | .tupGet _, _ => some ((column.map (·.role)).getD (args.headD false))
       | .query, _ | .mkArr, _ | .mkTup, _ | .mkSome, _ | .concat, _ |
@@ -996,6 +999,8 @@ private partial def expr (fns : Array Fn) (infos : Array Info)
                 MetadataCells.joinRefs refs (MetadataCells.loadRefs out.slots.heap [object] field)) []
             else []
           | _ => cellElements out.slots.heap first
+      | .mapGet =>
+        refs := MetadataCells.loadRefs out.slots.heap (cellElements out.slots.heap first) 1
       | .arrSet | .concat | .flatten =>
         let elements := if op == .flatten then
             cellElements out.slots.heap (cellElements out.slots.heap first)

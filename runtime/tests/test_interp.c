@@ -391,6 +391,23 @@ static void prim_cases(void)
     n_seq(&m, a, b);
     main_only(&p, &m, 1, m.count - 1);
     OK_OUT(&p, "abcd\naXcd\nabcd\nout\nnoset\nxyz\nq\n");
+
+    /* a map's lookups (#795): mapGet and mapFind on an array of pairs, the
+       first pair whose key is equal; no such pair fails */
+    a = n_assign(&m, 0, n_prim(&m, VX_P_MKARR, 0, 3,
+                               n_prim(&m, VX_P_MKTUP, 0, 2, n_int(&m, 7), n_char(&m, 'a')),
+                               n_prim(&m, VX_P_MKTUP, 0, 2, n_int(&m, 9), n_char(&m, 'b')),
+                               n_prim(&m, VX_P_MKTUP, 0, 2, n_int(&m, 7), n_char(&m, 'c'))));
+    b = n_seq(&m, n_print(&m, n_prim(&m, VX_P_MKARR, 0, 1, n_prim(&m, VX_P_MAPGET, 0, 2, n_local(&m, 0), n_int(&m, 7)))),
+              n_seq(&m, n_print(&m, n_prim(&m, VX_P_MKARR, 0, 1, n_prim(&m, VX_P_MAPGET, 0, 2, n_local(&m, 0), n_int(&m, 9)))),
+                    n_seq(&m, n_print(&m, n_prim(&m, VX_P_TOSTR, 0, 1, n_prim(&m, VX_P_MAPFIND, 0, 2, n_local(&m, 0), n_int(&m, 9)))),
+                          n_seq(&m, n_ite(&m, n_prim(&m, VX_P_MAPGET, 0, 2, n_local(&m, 0), n_int(&m, 8)),
+                                          n_print(&m, n_str(&m, "in")), n_print(&m, n_str(&m, "out"))),
+                                n_ite(&m, n_prim(&m, VX_P_MAPFIND, 0, 2, n_local(&m, 0), n_char(&m, 'a')),
+                                      n_print(&m, n_str(&m, "in")), n_print(&m, n_str(&m, "out")))))));
+    n_seq(&m, a, b);
+    main_only(&p, &m, 1, m.count - 1);
+    OK_OUT(&p, "a\nb\n1\nout\nout\n");
 }
 
 /* ABI and special-value cases bypass the source type checker (#490). */
